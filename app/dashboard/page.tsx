@@ -2,6 +2,7 @@ import { UserButton } from "@clerk/nextjs";
 import { auth } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/prisma";
 import { createWorkflow } from "@/lib/actions/workflow";
+import Link from "next/link";
 
 export default async function DashboardPage() {
   const { userId } = await auth();
@@ -36,13 +37,14 @@ export default async function DashboardPage() {
 
       <div className="mt-8 space-y-4">
         {workflows.map((workflow) => (
-          <div
+          <Link
             key={workflow.id}
-            className="border rounded p-4"
-          >
+            href={`/dashboard/workflow/${workflow.id}`}
+            className="block border rounded p-4"
+            >
             <h2>{workflow.name}</h2>
             <p>{workflow.status}</p>
-          </div>
+            </Link>
         ))}
       </div>
     </main>
