@@ -1,6 +1,20 @@
 import { UserButton } from "@clerk/nextjs";
+import { auth } from "@clerk/nextjs/server";
+import { prisma } from "@/lib/prisma";
+import { createWorkflow } from "@/lib/actions/workflow";
 
-export default function DashboardPage() {
+export default async function DashboardPage() {
+  const { userId } = await auth();
+
+  const workflows = await prisma.workflow.findMany({
+    where: {
+      userId: userId!,
+    },
+    orderBy: {
+      createdAt: "desc",
+    },
+  });
+
   return (
     <main className="min-h-screen p-8">
       <div className="flex items-center justify-between mb-8">
@@ -11,13 +25,25 @@ export default function DashboardPage() {
         <UserButton />
       </div>
 
-      <button className="px-4 py-2 border rounded">
-        Create Workflow
-      </button>
+      <form action={createWorkflow}>
+        <button
+          type="submit"
+          className="px-4 py-2 border rounded"
+        >
+          Create Workflow
+        </button>
+      </form>
 
-      <div className="mt-8 border rounded p-4">
-        <h2>My First Workflow</h2>
-        <p>Draft</p>
+      <div className="mt-8 space-y-4">
+        {workflows.map((workflow) => (
+          <div
+            key={workflow.id}
+            className="border rounded p-4"
+          >
+            <h2>{workflow.name}</h2>
+            <p>{workflow.status}</p>
+          </div>
+        ))}
       </div>
     </main>
   );
