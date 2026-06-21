@@ -83,7 +83,7 @@ export default async function DashboardPage() {
               </div>
             ) : (
               <div className="overflow-hidden rounded-md border border-[#e2e2de] bg-white">
-                <div className="grid grid-cols-[1fr_130px_150px_250px] gap-4 border-b border-[#ededeb] px-4 py-3 text-xs font-semibold uppercase tracking-wide text-[#77756f]">
+                <div className="grid grid-cols-[1fr_130px_150px_320px] gap-4 border-b border-[#ededeb] px-4 py-3 text-xs font-semibold uppercase tracking-wide text-[#77756f]">
                   <span>Name</span>
                   <span>Status</span>
                   <span>Last edited</span>
@@ -92,7 +92,7 @@ export default async function DashboardPage() {
                 {workflows.map((workflow) => (
                   <div
                     key={workflow.id}
-                    className="grid grid-cols-[1fr_130px_150px_250px] items-center gap-4 border-b border-[#f0f0ed] px-4 py-3 last:border-b-0"
+                    className="grid grid-cols-[1fr_130px_150px_320px] items-center gap-4 border-b border-[#f0f0ed] px-4 py-3 last:border-b-0"
                   >
                     <Link href={`/dashboard/workflow/${workflow.id}`} className="min-w-0">
                       <p className="truncate text-sm font-medium">{workflow.name}</p>
@@ -102,18 +102,18 @@ export default async function DashboardPage() {
                       {workflow.status}
                     </span>
                     <span className="text-sm text-[#77756f]">{formatUpdatedAt(workflow.updatedAt)}</span>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <Link
                         href={`/dashboard/workflow/${workflow.id}`}
                         className="rounded-md border border-[#d9d9d4] px-2.5 py-1.5 text-xs font-medium hover:bg-[#f7f7f5]"
                       >
                         Open
                       </Link>
-                      <form action={renameWorkflow} className="flex min-w-0 items-center gap-1">
+                      <form action={renameWorkflow} className="flex min-w-0 flex-wrap items-center gap-1">
                         <input type="hidden" name="id" value={workflow.id} />
                         <input
                           aria-label={`Rename ${workflow.name}`}
-                          className="w-24 rounded-md border border-[#d9d9d4] px-2 py-1.5 text-xs outline-none focus:border-[#8c8b84]"
+                          className="w-28 rounded-md border border-[#d9d9d4] px-2 py-1.5 text-xs outline-none focus:border-[#8c8b84]"
                           name="name"
                           defaultValue={workflow.name}
                         />
@@ -121,7 +121,7 @@ export default async function DashboardPage() {
                           Rename
                         </button>
                       </form>
-                      <form action={deleteWorkflow}>
+                      <form action={deleteWorkflow} className="flex-shrink-0">
                         <input type="hidden" name="id" value={workflow.id} />
                         <button className="rounded-md border border-[#f0c5c5] px-2 py-1.5 text-xs font-medium text-[#a83232] hover:bg-[#fff6f6]" type="submit">
                           Delete

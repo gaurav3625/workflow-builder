@@ -54,17 +54,25 @@ type Snapshot = {
 type HistoryNode = {
   id: string;
   title: string;
-  status: "success" | "failed" | "partial";
+  status: "pending" | "running" | "success" | "failed" | "partial";
   duration: string;
   output: string;
 };
 
+type HistoryRunScopeLabel = "Full Workflow" | "Multi-select" | "Single Node";
+
 type HistoryRun = {
-  id: number;
-  scope: string;
-  status: "success" | "failed" | "partial";
+  id: string;
+  scope: HistoryRunScopeLabel;
+  status: "pending" | "running" | "success" | "failed" | "partial";
   startedAt: string;
   duration: string;
+  nodes: HistoryNode[];
+};
+
+type PersistedRun = {
+  scope: "full" | "partial" | "single";
+  status: "pending" | "running" | "success" | "failed" | "partial";
   nodes: HistoryNode[];
 };
 
@@ -358,19 +366,121 @@ function cloneSnapshot(nodes: FlowNode[], edges: FlowEdge[]): Snapshot {
   };
 }
 
-export default function WorkflowCanvas({ workflowName }: { workflowId: string; workflowName: string }) {
-  const [nodes, setNodes] = useState<FlowNode[]>(INITIAL_NODES);
-  const [edges, setEdges] = useState<FlowEdge[]>(INITIAL_EDGES);
+function normalizeFlowNodes(nodes: FlowNode[]): FlowNode[] {
+  return nodes.map((node) => ({
+    ...node,
+    id: String(node.id).trim(),
+    type: "workflowNode",
+    position: node.position ? { x: node.position.x, y: node.position.y } : { x: 0, y: 0 },
+    data: { ...node.data },
+  }));
+}
+
+const HANDLE_NORMALIZATION: Record<string, string> = {
+  inputImage: "input-image",
+  outputImage: "output-image",
+  imageField: "image_field",
+  textField: "text_field",
+  inputimage: "input-image",
+  outputimage: "output-image",
+  imagefield: "image_field",
+  textfield: "text_field",
+};
+
+function normalizeHandleId(handleId?: string | null): string | null {
+  if (!handleId) return null;
+  const trimmed = handleId.trim();
+  return HANDLE_NORMALIZATION[trimmed] ?? trimmed;
+}
+
+function normalizeFlowEdges(edges: FlowEdge[]): FlowEdge[] {
+  return edges.map((edge) => {
+    return {
+      ...edge,
+      id: String(edge.id ?? "").trim(),
+      source: String(edge.source ?? "").trim(),
+      target: String(edge.target ?? "").trim(),
+      sourceHandle: normalizeHandleId(edge.sourceHandle ? String(edge.sourceHandle) : null),
+      targetHandle: normalizeHandleId(edge.targetHandle ? String(edge.targetHandle) : null),
+      data: edge.data ? { ...edge.data } : undefined,
+    };
+  });
+}
+
+export default function WorkflowCanvas({
+  workflowId,
+  workflowName,
+  initialFlow,
+  initialHistoryRuns,
+}: {
+  workflowId: string;
+  workflowName: string;
+  initialFlow?: { nodes: FlowNode[]; edges: FlowEdge[] } | null;
+  initialHistoryRuns?: HistoryRun[];
+}) {
+  const initialSnapshot = useMemo<Snapshot>(() => {
+    if (initialFlow && Array.isArray(initialFlow.nodes) && Array.isArray(initialFlow.edges)) {
+      return {
+        nodes: normalizeFlowNodes(initialFlow.nodes),
+        edges: normalizeFlowEdges(initialFlow.edges),
+      };
+    }
+
+    return {
+      nodes: INITIAL_NODES,
+      edges: INITIAL_EDGES,
+    };
+  }, [initialFlow]);
+
+  const [nodes, setNodes] = useState<FlowNode[]>(initialSnapshot.nodes);
+  const [edges, setEdges] = useState<FlowEdge[]>(initialSnapshot.edges);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [expandedRun, setExpandedRun] = useState<number | null>(1);
-  const [historyRuns, setHistoryRuns] = useState<HistoryRun[]>([]);
+  const [expandedRun, setExpandedRun] = useState<string | null>(null);
+  const [historyRuns, setHistoryRuns] = useState<HistoryRun[]>(initialHistoryRuns ?? []);
   const [toast, setToast] = useState("Ready");
   const [undoStack, setUndoStack] = useState<Snapshot[]>([]);
   const [redoStack, setRedoStack] = useState<Snapshot[]>([]);
-  const [runCounter, setRunCounter] = useState(123);
+  const [runCounter, setRunCounter] = useState(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const loggedRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const [saving, setSaving] = useState(false);
+
+  const saveWorkflow = useCallback(async () => {
+    setSaving(true);
+    try {
+      const response = await fetch(`/api/workflow/${workflowId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nodes, edges }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Save failed");
+      }
+
+      setToast("Workflow saved.");
+    } catch {
+      setToast("Unable to save workflow. Check your network.");
+    } finally {
+      setSaving(false);
+    }
+  }, [edges, nodes, workflowId]);
+
+  const persistRun = useCallback(
+    async (run: PersistedRun) => {
+      try {
+        await fetch(`/api/workflow/${workflowId}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(run),
+        });
+      } catch {
+        // Silently ignore persistence failures while keeping local UI state.
+      }
+    },
+    [workflowId],
+  );
 
   useEffect(() => {
     if (loggedRef.current) return;
@@ -401,22 +511,28 @@ export default function WorkflowCanvas({ workflowName }: { workflowId: string; w
 
   const onConnect = useCallback(
     (connection: Connection) => {
-      if (!isCompatible(connection)) {
+      const normalizedConnection = {
+        ...connection,
+        sourceHandle: normalizeHandleId(connection.sourceHandle ? String(connection.sourceHandle) : undefined),
+        targetHandle: normalizeHandleId(connection.targetHandle ? String(connection.targetHandle) : undefined),
+      };
+
+      if (!isCompatible(normalizedConnection)) {
         setToast("Invalid drag rejected: handle types do not match.");
         return;
       }
 
-      if (wouldCreateCycle(edges, connection)) {
+      if (wouldCreateCycle(edges, normalizedConnection)) {
         setToast("Invalid drag rejected: workflow must remain a DAG.");
         return;
       }
 
       pushUndo();
-      const kind = PORT_TYPES[portKey(connection.source, connection.sourceHandle)];
+      const kind = PORT_TYPES[portKey(normalizedConnection.source, normalizedConnection.sourceHandle)];
       setEdges((current) =>
         addEdge(
           {
-            ...connection,
+            ...normalizedConnection,
             animated: true,
             data: { kind },
             style: { stroke: kind === "image" ? "#7c8cff" : "#ff9b38", strokeWidth: 2 },
@@ -499,35 +615,64 @@ export default function WorkflowCanvas({ workflowName }: { workflowId: string; w
       timerRef.current = [];
 
       const targetIds = scope === "full" ? nodes.map((node) => node.id) : selectedNodeIds.length ? selectedNodeIds : ["gemini-1"];
+      const localIds = targetIds.filter((id): id is "request-inputs" | "response" => id === "request-inputs" || id === "response");
       const executableIds = targetIds.filter((id) => id !== "request-inputs" && id !== "response");
-      const cropIds = executableIds.filter((id) => nodes.find((node) => node.id === id)?.data.kind === "crop");
-      const geminiIds = executableIds.filter((id) => nodes.find((node) => node.id === id)?.data.kind === "gemini");
-      const localIds = targetIds.filter((id) => id === "request-inputs" || id === "response");
 
-      updateStatus(targetIds, "queued");
-      setToast("Run started. Independent siblings execute concurrently.");
+      const incomingDependencies = new Map<string, string[]>();
+      for (const edge of edges) {
+        if (!targetIds.includes(edge.target)) continue;
+        if (
+          !targetIds.includes(edge.source) &&
+          edge.source !== "request-inputs" &&
+          edge.source !== "response"
+        ) {
+          continue;
+        }
 
-      timerRef.current.push(
-        setTimeout(() => {
-          updateStatus(localIds, "success", "0.1s");
-          updateStatus([...cropIds, ...geminiIds], "running");
-        }, 250),
-      );
+        incomingDependencies.set(edge.target, [...(incomingDependencies.get(edge.target) ?? []), edge.source]);
+      }
 
-      timerRef.current.push(
-        setTimeout(() => {
-          updateStatus(geminiIds, "success", "4.2s");
-        }, 4300),
-      );
+      const isReady = (nodeId: string, completed: Set<string>) => {
+        const deps = incomingDependencies.get(nodeId) ?? [];
+        if (deps.length === 0) return true;
+        return deps.every((sourceId) => {
+          if (sourceId === "request-inputs" || sourceId === "response") return true;
+          return completed.has(sourceId);
+        });
+      };
 
-      timerRef.current.push(
-        setTimeout(() => {
-          updateStatus(cropIds, "success", "31.8s");
-          updateStatus(["response"].filter((id) => targetIds.includes(id)), "success", "0.1s");
-          const runId = runCounter + 1;
-          setRunCounter(runId);
-          setHistoryRuns((current) => [
-            {
+      const runDurationMs = (nodeId: string) => {
+        const nodeKind = nodes.find((node) => node.id === nodeId)?.data.kind;
+        if (nodeKind === "crop") return 31800;
+        if (nodeKind === "gemini") return 4200;
+        return 100;
+      };
+
+      const runDurationLabel = (nodeId: string) => {
+        const nodeKind = nodes.find((node) => node.id === nodeId)?.data.kind;
+        if (nodeKind === "crop") return "31.8s";
+        if (nodeKind === "gemini") return "4.2s";
+        return "0.1s";
+      };
+
+      const completed = new Set<string>();
+      const running = new Set<string>();
+      const scheduleNext = () => {
+        const readyNodes = executableIds.filter(
+          (id) => !completed.has(id) && !running.has(id) && isReady(id, completed),
+        );
+
+        if (readyNodes.length === 0) {
+          if (running.size === 0) {
+            if (targetIds.includes("response")) {
+              updateStatus(["response"], "success", "0.1s");
+            }
+            const nextRunNumber = runCounter + 1;
+            const runId = String(nextRunNumber);
+            setRunCounter(nextRunNumber);
+            const runScope: PersistedRun["scope"] =
+              scope === "full" ? "full" : scope === "selected" ? "partial" : "single";
+            const uiRun: HistoryRun = {
               id: runId,
               scope: scope === "full" ? "Full Workflow" : scope === "selected" ? "Multi-select" : "Single Node",
               status: "success",
@@ -538,7 +683,7 @@ export default function WorkflowCanvas({ workflowName }: { workflowId: string; w
                 hour: "numeric",
                 minute: "2-digit",
               }).format(new Date()),
-              duration: cropIds.length ? "31.8s" : "4.5s",
+              duration: executableIds.some((id) => nodes.find((item) => item.id === id)?.data.kind === "crop") ? "31.8s" : "4.5s",
               nodes: targetIds.map((id) => {
                 const node = nodes.find((item) => item.id === id);
                 return {
@@ -549,15 +694,47 @@ export default function WorkflowCanvas({ workflowName }: { workflowId: string; w
                   output: node?.data.kind === "crop" ? "https://cdn.transloadit.com/..." : node?.data.kind === "gemini" ? "Generated response preview..." : "Values resolved locally",
                 };
               }),
-            },
-            ...current,
-          ]);
-          setExpandedRun(runId);
-          setToast("Run complete. History entry created.");
-        }, cropIds.length ? 31800 : 4600),
+            };
+
+            const persistedRun = {
+              scope: runScope,
+              status: uiRun.status,
+              nodes: uiRun.nodes,
+            };
+
+            setHistoryRuns((current) => [uiRun, ...current]);
+            setExpandedRun(runId);
+            setToast("Run complete. History entry created.");
+            void persistRun(persistedRun);
+          }
+          return;
+        }
+
+        updateStatus(readyNodes, "running");
+        readyNodes.forEach((nodeId) => {
+          running.add(nodeId);
+          const durationMs = runDurationMs(nodeId);
+          timerRef.current.push(
+            setTimeout(() => {
+              running.delete(nodeId);
+              completed.add(nodeId);
+              updateStatus([nodeId], "success", runDurationLabel(nodeId));
+              scheduleNext();
+            }, durationMs),
+          );
+        });
+      };
+
+      updateStatus(targetIds, "queued");
+      setToast("Run started. Independent siblings execute concurrently.");
+      timerRef.current.push(
+        setTimeout(() => {
+          updateStatus(localIds, "success", "0.1s");
+          scheduleNext();
+        }, 250),
       );
     },
-    [nodes, runCounter, selectedNodeIds, updateStatus],
+    [edges, nodes, runCounter, selectedNodeIds, updateStatus],
   );
 
   const exportJson = useCallback(() => {
@@ -575,8 +752,8 @@ export default function WorkflowCanvas({ workflowName }: { workflowId: string; w
           throw new Error("Invalid workflow file");
         }
         pushUndo();
-        setNodes(parsed.nodes);
-        setEdges(parsed.edges);
+        setNodes(normalizeFlowNodes(parsed.nodes));
+        setEdges(normalizeFlowEdges(parsed.edges));
         setToast("Workflow JSON imported.");
       } catch {
         setToast("Import failed: JSON did not match workflow format.");
@@ -617,6 +794,9 @@ export default function WorkflowCanvas({ workflowName }: { workflowId: string; w
                 Redo
               </button>
             </div>
+            <button className="w-full rounded-md border border-[#191919] bg-[#191919] px-2 py-2 text-xs font-medium text-white hover:bg-[#343434] disabled:cursor-not-allowed disabled:opacity-50" disabled={saving} onClick={saveWorkflow}>
+              {saving ? "Saving..." : "Save workflow"}
+            </button>
             <button className="w-full rounded-md border border-[#f0c5c5] px-2 py-2 text-xs font-medium text-[#a83232] hover:bg-[#fff6f6]" onClick={deleteSelected}>
               Delete selected
             </button>
