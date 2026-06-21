@@ -1,51 +1,139 @@
 import { UserButton } from "@clerk/nextjs";
 import { auth } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/prisma";
-import { createWorkflow } from "@/lib/actions/workflow";
+import { createWorkflow, deleteWorkflow, renameWorkflow } from "@/lib/actions/workflow";
 import Link from "next/link";
 
+function formatUpdatedAt(date: Date) {
+  return new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
 export default async function DashboardPage() {
-  const { userId } = await auth();
+  const { userId, redirectToSignIn } = await auth();
+
+  if (!userId) {
+    return redirectToSignIn();
+  }
 
   const workflows = await prisma.workflow.findMany({
     where: {
-      userId: userId!,
+      userId,
     },
     orderBy: {
-      createdAt: "desc",
+      updatedAt: "desc",
     },
   });
 
   return (
-    <main className="min-h-screen p-8">
-      <div className="flex items-center justify-between mb-8">
-        <h1 className="text-3xl font-bold">
-          Workflows
-        </h1>
-
-        <UserButton />
-      </div>
-
-      <form action={createWorkflow}>
-        <button
-          type="submit"
-          className="px-4 py-2 border rounded"
-        >
-          Create Workflow
-        </button>
-      </form>
-
-      <div className="mt-8 space-y-4">
-        {workflows.map((workflow) => (
-          <Link
-            key={workflow.id}
-            href={`/dashboard/workflow/${workflow.id}`}
-            className="block border rounded p-4"
-            >
-            <h2>{workflow.name}</h2>
-            <p>{workflow.status}</p>
+    <main className="min-h-screen bg-[#f7f7f5] text-[#171717]">
+      <div className="flex min-h-screen">
+        <aside className="hidden w-64 shrink-0 border-r border-[#e2e2de] bg-white px-4 py-5 md:block">
+          <div className="mb-8 flex items-center gap-2">
+            <div className="grid size-8 place-items-center rounded-md bg-[#191919] text-sm font-semibold text-white">
+              N
+            </div>
+            <div>
+              <p className="text-sm font-semibold leading-tight">NextFlow</p>
+              <p className="text-xs text-[#77756f]">Workflow builder</p>
+            </div>
+          </div>
+          <nav className="space-y-1 text-sm">
+            <Link className="block rounded-md bg-[#f0f0ed] px-3 py-2 font-medium" href="/dashboard">
+              Workflows
             </Link>
-        ))}
+          </nav>
+        </aside>
+
+        <section className="flex min-w-0 flex-1 flex-col">
+          <header className="flex items-center justify-between border-b border-[#e2e2de] bg-white px-5 py-4">
+            <div>
+              <h1 className="text-xl font-semibold tracking-tight">Workflows</h1>
+              <p className="text-sm text-[#77756f]">Create, open, rename, and delete your saved flows.</p>
+            </div>
+            <div className="flex items-center gap-3">
+              <form action={createWorkflow}>
+                <button
+                  type="submit"
+                  className="rounded-md bg-[#191919] px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-[#343434]"
+                >
+                  Create New Workflow
+                </button>
+              </form>
+              <UserButton />
+            </div>
+          </header>
+
+          <div className="p-5">
+            {workflows.length === 0 ? (
+              <div className="flex min-h-[420px] items-center justify-center rounded-md border border-dashed border-[#d6d6d0] bg-white">
+                <div className="max-w-sm text-center">
+                  <h2 className="text-lg font-semibold">No workflows yet</h2>
+                  <p className="mt-2 text-sm text-[#77756f]">Create your first workflow to open the canvas with Request-Inputs and Response already placed.</p>
+                  <form action={createWorkflow} className="mt-5">
+                    <button className="rounded-md bg-[#191919] px-3 py-2 text-sm font-medium text-white" type="submit">
+                      Create Workflow
+                    </button>
+                  </form>
+                </div>
+              </div>
+            ) : (
+              <div className="overflow-hidden rounded-md border border-[#e2e2de] bg-white">
+                <div className="grid grid-cols-[1fr_130px_150px_250px] gap-4 border-b border-[#ededeb] px-4 py-3 text-xs font-semibold uppercase tracking-wide text-[#77756f]">
+                  <span>Name</span>
+                  <span>Status</span>
+                  <span>Last edited</span>
+                  <span>Actions</span>
+                </div>
+                {workflows.map((workflow) => (
+                  <div
+                    key={workflow.id}
+                    className="grid grid-cols-[1fr_130px_150px_250px] items-center gap-4 border-b border-[#f0f0ed] px-4 py-3 last:border-b-0"
+                  >
+                    <Link href={`/dashboard/workflow/${workflow.id}`} className="min-w-0">
+                      <p className="truncate text-sm font-medium">{workflow.name}</p>
+                      <p className="truncate text-xs text-[#77756f]">{workflow.id}</p>
+                    </Link>
+                    <span className="w-fit rounded-full bg-[#ecf8ef] px-2 py-1 text-xs font-medium text-[#257942]">
+                      {workflow.status}
+                    </span>
+                    <span className="text-sm text-[#77756f]">{formatUpdatedAt(workflow.updatedAt)}</span>
+                    <div className="flex items-center gap-2">
+                      <Link
+                        href={`/dashboard/workflow/${workflow.id}`}
+                        className="rounded-md border border-[#d9d9d4] px-2.5 py-1.5 text-xs font-medium hover:bg-[#f7f7f5]"
+                      >
+                        Open
+                      </Link>
+                      <form action={renameWorkflow} className="flex min-w-0 items-center gap-1">
+                        <input type="hidden" name="id" value={workflow.id} />
+                        <input
+                          aria-label={`Rename ${workflow.name}`}
+                          className="w-24 rounded-md border border-[#d9d9d4] px-2 py-1.5 text-xs outline-none focus:border-[#8c8b84]"
+                          name="name"
+                          defaultValue={workflow.name}
+                        />
+                        <button className="rounded-md border border-[#d9d9d4] px-2 py-1.5 text-xs font-medium hover:bg-[#f7f7f5]" type="submit">
+                          Rename
+                        </button>
+                      </form>
+                      <form action={deleteWorkflow}>
+                        <input type="hidden" name="id" value={workflow.id} />
+                        <button className="rounded-md border border-[#f0c5c5] px-2 py-1.5 text-xs font-medium text-[#a83232] hover:bg-[#fff6f6]" type="submit">
+                          Delete
+                        </button>
+                      </form>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
       </div>
     </main>
   );

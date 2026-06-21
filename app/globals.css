@@ -25,3 +25,66 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+.react-flow__edge.animated path {
+  stroke-dasharray: 6;
+  animation-duration: 0.7s;
+}
+
+.workflow-card {
+  width: 230px;
+  border: 1px solid #e4e1da;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  padding: 12px;
+  box-shadow: 0 10px 26px rgba(31, 31, 31, 0.08);
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.workflow-card-selected {
+  border-color: #8f87ff;
+  box-shadow: 0 0 0 2px rgba(143, 135, 255, 0.18), 0 12px 30px rgba(31, 31, 31, 0.12);
+}
+
+.workflow-card.node-running {
+  border-color: #8f87ff;
+  box-shadow: 0 0 0 1px rgba(143, 135, 255, 0.2), 0 0 22px rgba(107, 92, 255, 0.42), 0 12px 30px rgba(31, 31, 31, 0.1);
+  animation: nextflow-pulse 1.15s ease-in-out infinite;
+}
+
+.workflow-card.node-success {
+  border-color: #9ed8b3;
+}
+
+.workflow-card.node-queued {
+  border-color: #dedbd4;
+  opacity: 0.82;
+}
+
+.workflow-card.node-failed {
+  border-color: #e6a1a1;
+}
+
+.react-flow__handle-text,
+.react-flow__handle-image {
+  width: 8px;
+  height: 8px;
+  border: 2px solid #fff;
+}
+
+.react-flow__handle-text {
+  background: #ff9b38;
+}
+
+.react-flow__handle-image {
+  background: #7c8cff;
+}
+
+@keyframes nextflow-pulse {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-2px);
+  }
+}
