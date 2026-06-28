@@ -1,7 +1,8 @@
-import { prisma } from "@/lib/prisma";
+﻿import { prisma } from "@/lib/prisma";
 import { notFound } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
 import WorkflowCanvas from "@/components/WorkflowCanvas";
+import { databaseUnavailableMessage, isDatabaseConnectionError } from "@/lib/prisma-errors";
 import type { FlowEdge, FlowNode } from "@/components/workflow/types";
 
 interface Props {
@@ -19,12 +20,29 @@ export default async function WorkflowPage({ params }: Props) {
 
   const { id } = await params;
 
-  const workflow = await prisma.workflow.findFirst({
+  const { workflow, databaseError } = await prisma.workflow.findFirst({
     where: {
       id,
       userId,
     },
-  });
+  })
+    .then((item) => ({ workflow: item, databaseError: false }))
+    .catch((error: unknown) => {
+      if (!isDatabaseConnectionError(error)) throw error;
+      console.error("[workflow] Unable to load workflow", error);
+      return { workflow: null, databaseError: true };
+    });
+
+  if (databaseError) {
+    return (
+      <main className="grid min-h-screen place-items-center bg-[#f7f7f5] p-6 text-[#171717]">
+        <div className="max-w-md rounded-md border border-[#f0c5c5] bg-white p-5 text-sm shadow-sm">
+          <h1 className="text-base font-semibold text-[#8f2424]">Unable to load workflow</h1>
+          <p className="mt-2 text-[#6d6b65]">{databaseUnavailableMessage()}</p>
+        </div>
+      </main>
+    );
+  }
 
   if (!workflow) {
     notFound();
@@ -43,54 +61,5 @@ export default async function WorkflowPage({ params }: Props) {
         }
       : null;
 
-  const runs = await prisma.run.findMany({
-    where: { workflowId: id },
-    orderBy: { startedAt: "desc" },
-    include: { nodeRuns: true },
-  });
-
-  const initialHistoryRuns = runs.map((run) => ({
-    id: run.id,
-    scope: (
-      run.scope === "full"
-        ? "Full Workflow"
-        : run.scope === "partial"
-        ? "Multi-select"
-        : "Single Node"
-    ) as "Full Workflow" | "Multi-select" | "Single Node",
-    status: run.status,
-    startedAt: run.startedAt.toLocaleString("en", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    }),
-    completedAt: run.finishedAt
-      ? run.finishedAt.toLocaleString("en", {
-          month: "short",
-          day: "numeric",
-          year: "numeric",
-          hour: "numeric",
-          minute: "2-digit",
-        })
-      : undefined,
-    duration: run.durationMs ? `${(run.durationMs / 1000).toFixed(1)}s` : "-",
-    nodes: run.nodeRuns.map((nodeRun) => ({
-      id: nodeRun.nodeId,
-      title: nodeRun.label,
-      status: nodeRun.status,
-      duration: nodeRun.durationMs ? `${(nodeRun.durationMs / 1000).toFixed(1)}s` : "-",
-      output: typeof nodeRun.output === "string" ? nodeRun.output : JSON.stringify(nodeRun.output ?? {}),
-    })),
-  }));
-
-  return (
-    <WorkflowCanvas
-      workflowId={workflow.id}
-      workflowName={workflow.name}
-      initialFlow={initialFlow}
-      initialHistoryRuns={initialHistoryRuns}
-    />
-  );
+  return <WorkflowCanvas workflowId={workflow.id} workflowName={workflow.name} initialFlow={initialFlow} />;
 }

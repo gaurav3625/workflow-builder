@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactFlow, {
@@ -22,8 +22,10 @@ import WorkflowNode from "@/components/workflow/WorkflowNode";
 import {
   type FlowEdge,
   type FlowNode,
+  type HistoryNode,
   type HistoryRun,
   type NodeKind,
+  type PersistedNodeRun,
   type PersistedRun,
   type PortKind,
   type RunStatus,
@@ -150,30 +152,7 @@ function edge(source: string, sourceHandle: string, target: string, targetHandle
 const nodeTypes = { workflowNode: WorkflowNode };
 
 function buildRunOutput(node: FlowNode): string {
-  switch (node.data.kind) {
-    case "crop":
-      return JSON.stringify(
-        { url: "https://cdn.transloadit.com/cropped-output.jpg", crop: node.data.crop },
-        null,
-        2,
-      );
-    case "gemini":
-      return JSON.stringify(
-        {
-          model: "gemini-3.1-pro",
-          response: "Generated response preview based on connected inputs.",
-          prompt: node.data.prompt ?? "",
-        },
-        null,
-        2,
-      );
-    case "request":
-      return JSON.stringify({ text_field: node.data.output ?? "", image_field: "[binary]" }, null, 2);
-    case "response":
-      return JSON.stringify({ result: "Workflow result captured for display/export." }, null, 2);
-    default:
-      return "{}";
-  }
+  return buildNodeResult(node);
 }
 
 const HANDLE_NORMALIZATION: Record<string, string> = {
@@ -330,6 +309,25 @@ function normalizeFlowNodes(nodes: FlowNode[]): FlowNode[] {
   });
 }
 
+function formatDurationMs(durationMs: number | null): string {
+  if (durationMs === null) return "Running";
+  if (durationMs < 1000) return `${durationMs}ms`;
+  return `${(durationMs / 1000).toFixed(1)}s`;
+}
+
+function historyStatusClass(status: HistoryRun["status"] | HistoryNode["status"]): string {
+  if (status === "success") return "bg-[#ecf8ef] text-[#257942]";
+  if (status === "failed") return "bg-[#fdecec] text-[#a83232]";
+  return "bg-[#f3f2ee] text-[#55524b]";
+}
+
+function buildNodeResult(node: FlowNode): string {
+  return JSON.stringify({
+    nodeId: node.id,
+    title: node.data.title,
+    type: node.data.kind,
+  });
+}
 function normalizeFlowEdges(edges: FlowEdge[]): FlowEdge[] {
   return edges.map((edge) => {
     return {
@@ -348,12 +346,10 @@ export default function WorkflowCanvas({
   workflowId,
   workflowName,
   initialFlow,
-  initialHistoryRuns,
 }: {
   workflowId: string;
   workflowName: string;
   initialFlow?: { nodes: FlowNode[]; edges: FlowEdge[] } | null;
-  initialHistoryRuns?: HistoryRun[];
 }) {
   const initialSnapshot = useMemo<Snapshot>(() => {
     if (initialFlow && Array.isArray(initialFlow.nodes) && Array.isArray(initialFlow.edges)) {
@@ -370,7 +366,7 @@ export default function WorkflowCanvas({
   const [edges, setEdges] = useState<FlowEdge[]>(initialSnapshot.edges);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [expandedRun, setExpandedRun] = useState<string | null>(null);
-  const [historyRuns, setHistoryRuns] = useState<HistoryRun[]>(initialHistoryRuns ?? []);
+  const [historyRuns, setHistoryRuns] = useState<HistoryRun[]>([]);
   const [toast, setToast] = useState("Ready");
   const [undoStack, setUndoStack] = useState<Snapshot[]>([]);
   const [redoStack, setRedoStack] = useState<Snapshot[]>([]);
@@ -423,7 +419,7 @@ export default function WorkflowCanvas({
 
   const fetchHistoryRuns = useCallback(async () => {
     try {
-      const response = await fetch(`/api/workflow/${workflowId}`, { method: "GET" });
+      const response = await fetch(`/api/runs?workflowId=${encodeURIComponent(workflowId)}`, { method: "GET" });
       if (!response.ok) return;
       const payload = (await response.json()) as { runs?: HistoryRun[] };
       if (Array.isArray(payload.runs)) {
@@ -447,17 +443,15 @@ export default function WorkflowCanvas({
           throw new Error("Run persistence failed");
         }
 
-        const payload = (await response.json()) as { runId?: string; runs?: HistoryRun[] };
-        if (Array.isArray(payload.runs)) {
-          setHistoryRuns(payload.runs);
-        }
+        const payload = (await response.json()) as { runId?: string };
+        await fetchHistoryRuns();
         return payload.runId;
       } catch {
         setToast("Run complete, but history persistence failed.");
         return undefined;
       }
     },
-    [workflowId],
+    [fetchHistoryRuns, workflowId],
   );
 
   useEffect(() => {
@@ -736,15 +730,27 @@ export default function WorkflowCanvas({
       const runStartedAt = new Date();
       resetRunState(targetIds);
       const executableIds = targetIds.filter((id) => id !== "request-inputs" && id !== "response");
+      const nodeResults = new Map<string, PersistedNodeRun>();
+      const recordNodeResult = (nodeId: string, startedAt: Date, completedAt: Date) => {
+        const node = nodes.find((item) => item.id === nodeId);
+        if (!node) return;
+
+        nodeResults.set(nodeId, {
+          id: nodeId,
+          title: node.data.title,
+          type: node.data.kind,
+          status: "success",
+          startedAt: startedAt.toISOString(),
+          completedAt: completedAt.toISOString(),
+          durationMs: Math.max(0, completedAt.getTime() - startedAt.getTime()),
+          output: buildNodeResult(node),
+        });
+      };
 
       const incomingDependencies = new Map<string, string[]>();
       for (const edge of edges) {
         if (!targetIds.includes(edge.target)) continue;
-        if (
-          !targetIds.includes(edge.source) &&
-          edge.source !== "request-inputs" &&
-          edge.source !== "response"
-        ) {
+        if (!targetIds.includes(edge.source) && edge.source !== "request-inputs" && edge.source !== "response") {
           continue;
         }
 
@@ -760,84 +766,76 @@ export default function WorkflowCanvas({
         });
       };
 
-      const runDurationMs = (nodeId: string) => {
+      const simulatedRunDelayMs = (nodeId: string) => {
         const nodeKind = nodes.find((node) => node.id === nodeId)?.data.kind;
         if (nodeKind === "crop") return 31800;
         if (nodeKind === "gemini") return 4200;
         return 100;
       };
 
-      const runDurationLabel = (nodeId: string) => {
-        const nodeKind = nodes.find((node) => node.id === nodeId)?.data.kind;
-        if (nodeKind === "crop") return "31.8s";
-        if (nodeKind === "gemini") return "4.2s";
-        return "0.1s";
-      };
-
       const completed = new Set<string>();
       const running = new Set<string>();
+      const completeRun = () => {
+        if (targetIds.includes("response") && !nodeResults.has("response")) {
+          const responseStartedAt = new Date();
+          const responseCompletedAt = new Date();
+          const responseNode = nodes.find((node) => node.id === "response");
+          recordNodeResult("response", responseStartedAt, responseCompletedAt);
+          updateNodeRunState(["response"], "success", {
+            duration: formatDurationMs(responseCompletedAt.getTime() - responseStartedAt.getTime()),
+            runOutput: responseNode ? buildRunOutput(responseNode) : undefined,
+          });
+        }
+
+        const runCompletedAt = new Date();
+        const runScope: PersistedRun["scope"] = scope === "full" ? "full" : scope === "selected" ? "partial" : "single";
+        const persistedRun: PersistedRun = {
+          scope: runScope,
+          status: "success",
+          startedAt: runStartedAt.toISOString(),
+          completedAt: runCompletedAt.toISOString(),
+          nodes: targetIds.flatMap((id) => {
+            const result = nodeResults.get(id);
+            return result ? [result] : [];
+          }),
+        };
+
+        setToast("Run complete. Saving history...");
+        void persistRun(persistedRun).then((runId) => {
+          if (runId) {
+            setExpandedRun(runId);
+            setToast("Run complete. History entry saved.");
+          }
+        });
+      };
+
       const scheduleNext = () => {
         const readyNodes = executableIds.filter(
           (id) => !completed.has(id) && !running.has(id) && isReady(id, completed),
         );
 
         if (readyNodes.length === 0) {
-          if (running.size === 0) {
-            if (targetIds.includes("response")) {
-              const responseNode = nodes.find((node) => node.id === "response");
-              updateNodeRunState(["response"], "success", {
-                duration: "0.1s",
-                runOutput: responseNode ? buildRunOutput(responseNode) : undefined,
-              });
-            }
-            const runCompletedAt = new Date();
-            const runScope: PersistedRun["scope"] =
-              scope === "full" ? "full" : scope === "selected" ? "partial" : "single";
-            const persistedRun: PersistedRun = {
-              scope: runScope,
-              status: "success",
-              startedAt: runStartedAt.toISOString(),
-              completedAt: runCompletedAt.toISOString(),
-              nodes: targetIds.map((id) => {
-                const node = nodes.find((item) => item.id === id);
-                const duration =
-                  node?.data.kind === "crop" ? "31.8s" : node?.data.kind === "gemini" ? "4.2s" : "0.1s";
-                return {
-                  id,
-                  title: node?.data.title ?? id,
-                  status: "success" as const,
-                  duration,
-                  output: node ? buildRunOutput(node) : "",
-                };
-              }),
-            };
-
-            setToast("Run complete. Saving history...");
-            void persistRun(persistedRun).then((runId) => {
-              if (runId) {
-                setExpandedRun(runId);
-                setToast("Run complete. History entry saved.");
-              }
-            });
-          }
+          if (running.size === 0) completeRun();
           return;
         }
 
         updateNodeRunState(readyNodes, "running");
         readyNodes.forEach((nodeId) => {
           running.add(nodeId);
-          const durationMs = runDurationMs(nodeId);
+          const nodeStartedAt = new Date();
           timerRef.current.push(
             setTimeout(() => {
               running.delete(nodeId);
               completed.add(nodeId);
+              const nodeCompletedAt = new Date();
               const node = nodes.find((item) => item.id === nodeId);
+              recordNodeResult(nodeId, nodeStartedAt, nodeCompletedAt);
               updateNodeRunState([nodeId], "success", {
-                duration: runDurationLabel(nodeId),
+                duration: formatDurationMs(nodeCompletedAt.getTime() - nodeStartedAt.getTime()),
                 runOutput: node ? buildRunOutput(node) : undefined,
               });
               scheduleNext();
-            }, durationMs),
+            }, simulatedRunDelayMs(nodeId)),
           );
         });
       };
@@ -848,9 +846,12 @@ export default function WorkflowCanvas({
           targetIds
             .filter((id) => id === "request-inputs" || id === "response")
             .forEach((id) => {
+              const nodeStartedAt = new Date();
+              const nodeCompletedAt = new Date();
               const node = nodes.find((item) => item.id === id);
+              recordNodeResult(id, nodeStartedAt, nodeCompletedAt);
               updateNodeRunState([id], "success", {
-                duration: "0.1s",
+                duration: formatDurationMs(nodeCompletedAt.getTime() - nodeStartedAt.getTime()),
                 runOutput: node ? buildRunOutput(node) : undefined,
               });
             });
@@ -860,7 +861,6 @@ export default function WorkflowCanvas({
     },
     [edges, nodes, persistRun, resetRunState, selectedNodeIds, updateNodeRunState],
   );
-
   const exportJson = useCallback(() => {
     const payload = JSON.stringify({ nodes, edges }, null, 2);
     void navigator.clipboard?.writeText(payload);
@@ -1045,29 +1045,40 @@ export default function WorkflowCanvas({
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
             {historyRuns.length === 0 ? (
               <div className="rounded-md border border-dashed border-[#d9d8d2] bg-[#fbfbf9] p-4 text-sm text-[#77756f]">
-                Run the workflow to create the first history entry.
+                No runs yet. Execute the workflow to see history here.
               </div>
             ) : null}
             {historyRuns.map((run) => (
               <div key={run.id} className="rounded-md border border-[#e6e4df] bg-[#fbfbf9]">
                 <button className="w-full px-3 py-3 text-left" onClick={() => setExpandedRun(expandedRun === run.id ? null : run.id)}>
                   <div className="flex items-center justify-between gap-3">
-                    <span className="text-sm font-medium">Run #{run.id}</span>
-                    <span className="rounded-full bg-[#ecf8ef] px-2 py-1 text-[10px] font-medium text-[#257942]">{run.status}</span>
+                    <span className="truncate text-sm font-medium">Run {run.id}</span>
+                    <span className={`rounded-full px-2 py-1 text-[10px] font-medium ${historyStatusClass(run.status)}`}>
+                      {run.status}
+                    </span>
                   </div>
-                  <div className="mt-1 text-xs text-[#77756f]">{run.startedAt} - {run.scope} - {run.duration}</div>
+                  <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[#77756f]">
+                    <span>{run.startedAtLabel}</span>
+                    <span>{formatDurationMs(run.durationMs)}</span>
+                    <span>{run.nodeCount} {run.nodeCount === 1 ? "node" : "nodes"}</span>
+                  </div>
                 </button>
                 {expandedRun === run.id ? (
                   <div className="border-t border-[#e6e4df] px-3 py-3">
+                    {run.nodes.length === 0 ? (
+                      <div className="text-xs text-[#77756f]">No node results were recorded for this run.</div>
+                    ) : null}
                     {run.nodes.map((node) => (
-                      <div key={`${run.id}-${node.id}`} className="grid grid-cols-[14px_1fr] gap-2 py-1.5 text-xs">
-                        <span className="mt-0.5 grid size-3 place-items-center rounded-sm bg-[#5dcb85] text-[9px] text-white">OK</span>
-                        <div>
+                      <div key={`${run.id}-${node.id}`} className="grid grid-cols-[auto_1fr] gap-2 py-1.5 text-xs">
+                        <span className={`mt-0.5 rounded px-1.5 py-0.5 text-[9px] font-medium ${historyStatusClass(node.status)}`}>
+                          {node.status}
+                        </span>
+                        <div className="min-w-0">
                           <div className="flex items-center justify-between gap-2">
-                            <span className="font-medium">{node.title}</span>
-                            <span className="text-[#77756f]">{node.duration}</span>
+                            <span className="truncate font-medium">{node.title}</span>
+                            <span className="shrink-0 text-[#77756f]">{formatDurationMs(node.durationMs)}</span>
                           </div>
-                          <p className="mt-0.5 truncate text-[#77756f]">&gt; {node.output}</p>
+                          <p className="mt-0.5 truncate text-[#77756f]">{node.output}</p>
                         </div>
                       </div>
                     ))}
@@ -1082,3 +1093,4 @@ export default function WorkflowCanvas({
     </WorkflowEditorContext.Provider>
   );
 }
+

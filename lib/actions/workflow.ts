@@ -1,9 +1,15 @@
-"use server";
+﻿"use server";
 
 import { auth } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/prisma";
+import { isDatabaseConnectionError } from "@/lib/prisma-errors";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+
+function handleDatabaseActionError(action: string, error: unknown) {
+  if (!isDatabaseConnectionError(error)) throw error;
+  console.error(`[workflow-action] ${action} failed because the database is unavailable`, error);
+}
 
 export async function createWorkflow() {
   const { userId, redirectToSignIn } = await auth();
@@ -19,7 +25,12 @@ export async function createWorkflow() {
       status: "draft",
       flowData: {},
     },
+  }).catch((error: unknown) => {
+    handleDatabaseActionError("createWorkflow", error);
+    return null;
   });
+
+  if (!workflow) return;
 
   revalidatePath("/dashboard");
   redirect(`/dashboard/workflow/${workflow.id}`);
@@ -39,7 +50,7 @@ export async function renameWorkflow(formData: FormData) {
     return;
   }
 
-  await prisma.workflow.updateMany({
+  const result = await prisma.workflow.updateMany({
     where: {
       id,
       userId,
@@ -47,7 +58,12 @@ export async function renameWorkflow(formData: FormData) {
     data: {
       name: name.slice(0, 80),
     },
+  }).catch((error: unknown) => {
+    handleDatabaseActionError("renameWorkflow", error);
+    return null;
   });
+
+  if (!result) return;
 
   revalidatePath("/dashboard");
   revalidatePath(`/dashboard/workflow/${id}`);
@@ -66,13 +82,17 @@ export async function deleteWorkflow(formData: FormData) {
     return;
   }
 
-  await prisma.workflow.deleteMany({
+  const result = await prisma.workflow.deleteMany({
     where: {
       id,
       userId,
     },
+  }).catch((error: unknown) => {
+    handleDatabaseActionError("deleteWorkflow", error);
+    return null;
   });
+
+  if (!result) return;
 
   revalidatePath("/dashboard");
 }
-

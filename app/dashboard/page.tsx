@@ -1,7 +1,8 @@
-import { UserButton } from "@clerk/nextjs";
+﻿import { UserButton } from "@clerk/nextjs";
 import { auth } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/prisma";
 import { createWorkflow, deleteWorkflow, renameWorkflow } from "@/lib/actions/workflow";
+import { databaseUnavailableMessage, isDatabaseConnectionError } from "@/lib/prisma-errors";
 import Link from "next/link";
 
 function formatUpdatedAt(date: Date) {
@@ -20,14 +21,20 @@ export default async function DashboardPage() {
     return redirectToSignIn();
   }
 
-  const workflows = await prisma.workflow.findMany({
+  const { workflows, databaseError } = await prisma.workflow.findMany({
     where: {
       userId,
     },
     orderBy: {
       updatedAt: "desc",
     },
-  });
+  })
+    .then((items) => ({ workflows: items, databaseError: null as string | null }))
+    .catch((error: unknown) => {
+      if (!isDatabaseConnectionError(error)) throw error;
+      console.error("[dashboard] Unable to load workflows", error);
+      return { workflows: [], databaseError: databaseUnavailableMessage() };
+    });
 
   return (
     <main className="min-h-screen bg-[#f7f7f5] text-[#171717]">
@@ -69,7 +76,13 @@ export default async function DashboardPage() {
           </header>
 
           <div className="p-5">
-            {workflows.length === 0 ? (
+            {databaseError ? (
+              <div className="mb-4 rounded-md border border-[#f0c5c5] bg-[#fff6f6] p-4 text-sm text-[#8f2424]">
+                <p className="font-medium">Unable to load workflows</p>
+                <p className="mt-1">{databaseError}</p>
+              </div>
+            ) : null}
+            {!databaseError && workflows.length === 0 ? (
               <div className="flex min-h-[420px] items-center justify-center rounded-md border border-dashed border-[#d6d6d0] bg-white">
                 <div className="max-w-sm text-center">
                   <h2 className="text-lg font-semibold">No workflows yet</h2>
@@ -138,3 +151,5 @@ export default async function DashboardPage() {
     </main>
   );
 }
+
+

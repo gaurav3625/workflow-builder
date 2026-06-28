@@ -1,8 +1,9 @@
-import type { Edge, Node } from "reactflow";
+﻿import type { Edge, Node } from "reactflow";
 
 export type PortKind = "text" | "image" | "any" | "result";
 export type NodeKind = "request" | "crop" | "gemini" | "response";
 export type RunStatus = "idle" | "running" | "success" | "error";
+export type PersistedStatus = "pending" | "running" | "success" | "failed" | "partial";
 
 export type FlowNodeData = {
   title: string;
@@ -35,29 +36,44 @@ export type Snapshot = {
 export type HistoryNode = {
   id: string;
   title: string;
-  status: "pending" | "running" | "success" | "failed" | "partial";
-  duration: string;
+  type?: string;
+  status: PersistedStatus;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  durationMs: number | null;
   output: string;
+  error?: string | null;
 };
-
-export type HistoryRunScopeLabel = "Full Workflow" | "Multi-select" | "Single Node";
 
 export type HistoryRun = {
   id: string;
-  scope: HistoryRunScopeLabel;
-  status: "pending" | "running" | "success" | "failed" | "partial";
+  scope: "full" | "partial" | "single";
+  status: PersistedStatus;
   startedAt: string;
-  completedAt?: string;
-  duration: string;
+  startedAtLabel: string;
+  completedAt: string | null;
+  durationMs: number | null;
+  nodeCount: number;
   nodes: HistoryNode[];
+};
+
+export type PersistedNodeRun = {
+  id: string;
+  title: string;
+  type: NodeKind;
+  status: PersistedStatus;
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+  output: string;
 };
 
 export type PersistedRun = {
   scope: "full" | "partial" | "single";
-  status: "pending" | "running" | "success" | "failed" | "partial";
+  status: PersistedStatus;
   startedAt: string;
   completedAt: string;
-  nodes: HistoryNode[];
+  nodes: PersistedNodeRun[];
 };
 
 export const RUNTIME_NODE_DATA_KEYS = ["status", "duration", "runOutput", "runError"] as const;
