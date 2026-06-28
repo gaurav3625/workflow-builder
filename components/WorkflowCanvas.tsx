@@ -1,6 +1,6 @@
-﻿"use client";
+"use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactFlow, {
   Background,
   BackgroundVariant,
@@ -12,6 +12,7 @@ import ReactFlow, {
   type Connection,
   type EdgeChange,
   type NodeChange,
+  type ReactFlowInstance,
 } from "reactflow";
 
 import "reactflow/dist/style.css";
@@ -22,7 +23,6 @@ import WorkflowNode from "@/components/workflow/WorkflowNode";
 import {
   type FlowEdge,
   type FlowNode,
-  type HistoryNode,
   type HistoryRun,
   type NodeKind,
   type PersistedNodeRun,
@@ -129,12 +129,22 @@ const SAMPLE_EDGES: FlowEdge[] = [
   edge("gemini-final", "response", "response", "result", "text"),
 ];
 
-const NODE_PICKER = [
-  { kind: "request" as const, label: "Request-Inputs", category: "Core" },
-  { kind: "crop" as const, label: "Crop Image", category: "Image" },
-  { kind: "gemini" as const, label: "Gemini 3.1 Pro", category: "Recent" },
-  { kind: "response" as const, label: "Response", category: "Core" },
+const NODE_PALETTE = [
+  { kind: "request" as const, label: "Request Inputs", category: "Triggers", icon: "IN", hint: "Receives text and image fields" },
+  { kind: "gemini" as const, label: "Gemini 3.1 Pro", category: "Actions", icon: "AI", hint: "Generates text from prompts" },
+  { kind: "crop" as const, label: "Crop Image", category: "Actions", icon: "CR", hint: "Transforms image regions" },
+  { kind: "gemini" as const, label: "Prompt Branch", category: "Logic", icon: "IF", hint: "Branch text through a model step" },
+  { kind: "response" as const, label: "Response", category: "Output", icon: "OUT", hint: "Returns final workflow data" },
 ];
+
+const PALETTE_CATEGORIES = ["Triggers", "Actions", "Logic", "Output"] as const;
+
+const NODE_KIND_META: Record<NodeKind, { label: string; accent: string }> = {
+  request: { label: "HTTP", accent: "#2563eb" },
+  crop: { label: "Transform", accent: "#7c3aed" },
+  gemini: { label: "AI", accent: "#7c3aed" },
+  response: { label: "Output", accent: "#0f9f6e" },
+};
 
 function edge(source: string, sourceHandle: string, target: string, targetHandle: string, kind: PortKind): FlowEdge {
   return {
@@ -231,12 +241,12 @@ function wouldCreateCycle(edges: FlowEdge[], connection: Connection) {
   return visit(connection.target);
 }
 
-function makeAddedNode(kind: NodeKind, count: number): FlowNode {
+function makeAddedNode(kind: NodeKind, count: number, position?: { x: number; y: number }): FlowNode {
   if (kind === "request") {
     return {
       id: "request-inputs",
       type: "workflowNode",
-      position: { x: 80, y: 220 },
+      position: position ?? { x: 80, y: 220 },
       deletable: false,
       data: {
         title: "Request-Inputs",
@@ -252,7 +262,7 @@ function makeAddedNode(kind: NodeKind, count: number): FlowNode {
     return {
       id: "response",
       type: "workflowNode",
-      position: { x: 720, y: 220 },
+      position: position ?? { x: 720, y: 220 },
       deletable: false,
       data: {
         title: "Response",
@@ -267,7 +277,7 @@ function makeAddedNode(kind: NodeKind, count: number): FlowNode {
   return {
     id,
     type: "workflowNode",
-    position: { x: 560 + count * 32, y: 140 + count * 28 },
+    position: position ?? { x: 560 + count * 32, y: 140 + count * 28 },
     data:
       kind === "crop"
         ? {
@@ -315,11 +325,6 @@ function formatDurationMs(durationMs: number | null): string {
   return `${(durationMs / 1000).toFixed(1)}s`;
 }
 
-function historyStatusClass(status: HistoryRun["status"] | HistoryNode["status"]): string {
-  if (status === "success") return "bg-[#ecf8ef] text-[#257942]";
-  if (status === "failed") return "bg-[#fdecec] text-[#a83232]";
-  return "bg-[#f3f2ee] text-[#55524b]";
-}
 
 function buildNodeResult(node: FlowNode): string {
   return JSON.stringify({
@@ -364,13 +369,17 @@ export default function WorkflowCanvas({
 
   const [nodes, setNodes] = useState<FlowNode[]>(initialSnapshot.nodes);
   const [edges, setEdges] = useState<FlowEdge[]>(initialSnapshot.edges);
-  const [pickerOpen, setPickerOpen] = useState(false);
+  const [paletteQuery, setPaletteQuery] = useState("");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [draftWorkflowName, setDraftWorkflowName] = useState(workflowName);
+  const [flowInstance, setFlowInstance] = useState<ReactFlowInstance | null>(null);
   const [expandedRun, setExpandedRun] = useState<string | null>(null);
   const [historyRuns, setHistoryRuns] = useState<HistoryRun[]>([]);
   const [toast, setToast] = useState("Ready");
   const [undoStack, setUndoStack] = useState<Snapshot[]>([]);
   const [redoStack, setRedoStack] = useState<Snapshot[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const flowWrapperRef = useRef<HTMLDivElement | null>(null);
   const loggedRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
@@ -576,24 +585,21 @@ export default function WorkflowCanvas({
   );
 
   const addNode = useCallback(
-    (kind: NodeKind) => {
+    (kind: NodeKind, position?: { x: number; y: number }) => {
       if (kind === "request" && nodes.some((node) => node.id === "request-inputs")) {
         setToast("Request-Inputs is already on the canvas.");
-        setPickerOpen(false);
         return;
       }
 
       if (kind === "response" && nodes.some((node) => node.id === "response")) {
         setToast("Response is already on the canvas.");
-        setPickerOpen(false);
         return;
       }
 
       pushUndo();
       markCanvasChanged();
       const count = nodes.filter((node) => node.data.kind === kind).length + 1;
-      setNodes((current) => [...current, makeAddedNode(kind, count)]);
-      setPickerOpen(false);
+      setNodes((current) => [...current, makeAddedNode(kind, count, position)]);
       const labels: Record<NodeKind, string> = {
         request: "Request-Inputs",
         crop: "Crop Image",
@@ -605,6 +611,44 @@ export default function WorkflowCanvas({
     [markCanvasChanged, nodes, pushUndo],
   );
 
+  const onPaletteDragStart = useCallback((event: DragEvent<HTMLButtonElement>, kind: NodeKind) => {
+    event.dataTransfer.setData("application/reactflow", kind);
+    event.dataTransfer.effectAllowed = "move";
+  }, []);
+
+  const onCanvasDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+  }, []);
+
+  const onCanvasDrop = useCallback(
+    (event: DragEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      const kind = event.dataTransfer.getData("application/reactflow") as NodeKind;
+      if (!kind || !flowInstance || !flowWrapperRef.current) return;
+
+      const bounds = flowWrapperRef.current.getBoundingClientRect();
+      const position = flowInstance.project({
+        x: event.clientX - bounds.left,
+        y: event.clientY - bounds.top,
+      });
+      addNode(kind, position);
+    },
+    [addNode, flowInstance],
+  );
+
+  const filteredPalette = useMemo(() => {
+    const query = paletteQuery.trim().toLowerCase();
+    return NODE_PALETTE.filter((item) => {
+      if (!query) return true;
+      return `${item.label} ${item.category} ${item.hint} ${item.kind}`.toLowerCase().includes(query);
+    });
+  }, [paletteQuery]);
+
+  const groupedPalette = useMemo(
+    () => PALETTE_CATEGORIES.map((category) => ({ category, items: filteredPalette.filter((item) => item.category === category) })),
+    [filteredPalette],
+  );
   const loadSampleWorkflow = useCallback(() => {
     pushUndo();
     markCanvasChanged();
@@ -888,209 +932,258 @@ export default function WorkflowCanvas({
   }, [markCanvasChanged, pushUndo]);
 
   const saveStatusText =
-    saveStatus === "saving" ? "Saving..." : saveStatus === "saved" ? "Saved \u2713" : saveStatus === "error" ? "Save failed" : "";
+    saveStatus === "saving" ? "Saving..." : saveStatus === "saved" ? "Saved" : saveStatus === "error" ? "Save failed" : "Unsaved";
+  const saveStatusTone =
+    saveStatus === "error" ? "bg-[#fff1f1] text-[#a83232]" : saveStatus === "saved" ? "bg-[#ecf8ef] text-[#257942]" : "bg-[#f3f2ee] text-[#55524b]";
 
   return (
     <WorkflowEditorContext.Provider value={editorContextValue}>
-    <main className="h-screen overflow-hidden bg-[#f7f7f5] text-[#1f1f1f]">
-      <div className="grid h-full grid-cols-[260px_1fr_330px]">
-        <aside className="border-r border-[#e0ded8] bg-white p-4">
-          <div className="mb-5 flex items-center gap-2">
-            <div className="grid size-8 place-items-center rounded-md bg-[#191919] text-sm font-semibold text-white">N</div>
-            <div className="min-w-0">
-              <h1 className="truncate text-sm font-semibold">{workflowName}</h1>
-              <p className="text-xs text-[#77756f]">Workflow canvas</p>
-            </div>
-          </div>
-
-          <div className="space-y-3 text-sm">
-            <button className="w-full rounded-md bg-[#191919] px-3 py-2 text-left text-sm font-medium text-white" onClick={() => runWorkflow("full")}>
-              Run workflow
-            </button>
-            <div className="grid grid-cols-2 gap-2">
-              <button className="rounded-md border border-[#d9d8d2] px-2 py-2 text-xs font-medium hover:bg-[#f7f7f5]" onClick={() => runWorkflow("single")}>
-                Run node
-              </button>
-              <button className="rounded-md border border-[#d9d8d2] px-2 py-2 text-xs font-medium hover:bg-[#f7f7f5]" onClick={() => runWorkflow("selected")}>
-                Run selected
-              </button>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <button className="rounded-md border border-[#d9d8d2] px-2 py-2 text-xs font-medium hover:bg-[#f7f7f5] disabled:cursor-not-allowed disabled:opacity-50" disabled={undoStack.length === 0} onClick={undo}>
-                Undo
-              </button>
-              <button className="rounded-md border border-[#d9d8d2] px-2 py-2 text-xs font-medium hover:bg-[#f7f7f5] disabled:cursor-not-allowed disabled:opacity-50" disabled={redoStack.length === 0} onClick={redo}>
-                Redo
-              </button>
-            </div>
-            <button className="w-full rounded-md border border-[#191919] bg-[#191919] px-2 py-2 text-xs font-medium text-white hover:bg-[#343434] disabled:cursor-not-allowed disabled:opacity-50" disabled={saveStatus === "saving"} onClick={() => void saveWorkflow()}>
-              {saveStatus === "saving" ? "Saving..." : "Save workflow"}
-            </button>
-            <button className="w-full rounded-md border border-[#f0c5c5] px-2 py-2 text-xs font-medium text-[#a83232] hover:bg-[#fff6f6]" onClick={deleteSelected}>
-              Delete selected
-            </button>
-          </div>
-
-          <div className="mt-6 border-t border-[#edebe5] pt-5">
-            <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-[#77756f]">Workflow JSON</h2>
-            <div className="grid grid-cols-2 gap-2">
-              <button className="rounded-md border border-[#d9d8d2] px-2 py-2 text-xs font-medium hover:bg-[#f7f7f5]" onClick={exportJson}>
-                Export
-              </button>
-              <button className="rounded-md border border-[#d9d8d2] px-2 py-2 text-xs font-medium hover:bg-[#f7f7f5]" onClick={() => fileInputRef.current?.click()}>
-                Import
-              </button>
-            </div>
-            <input
-              ref={fileInputRef}
-              className="hidden"
-              type="file"
-              accept="application/json"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) importJson(file);
-              }}
-            />
-            <button
-              className="mt-2 w-full rounded-md border border-[#d9d8d2] px-2 py-2 text-xs font-medium hover:bg-[#f7f7f5]"
-              onClick={loadSampleWorkflow}
-            >
-              Load Sample
-            </button>
-          </div>
-
-          <div className="mt-6 rounded-md border border-[#e6e4df] bg-[#fbfbf9] p-3 text-xs text-[#6d6b65]">
-            <div className="font-medium text-[#333]">Status</div>
-            <p className="mt-1">{toast}</p>
-          </div>
-        </aside>
-
-        <section className="relative min-w-0">
-          <div className="absolute left-4 top-4 z-10 flex items-center gap-2 rounded-md border border-[#e2e0da] bg-white/95 px-3 py-2 shadow-sm">
-            <a className="text-xs font-medium text-[#55524b] hover:text-[#191919]" href="/dashboard">
-              Dashboard
-            </a>
-            <span className="text-[#c4c1b9]">/</span>
-            <span className="text-xs text-[#77756f]">Trial Task Workflow</span>
-            {saveStatusText ? (
-              <span className={`ml-2 rounded-full px-2 py-0.5 text-[11px] font-medium ${saveStatus === "error" ? "bg-[#fff1f1] text-[#a83232]" : "bg-[#f3f2ee] text-[#55524b]"}`}>
-                {saveStatusText}
-              </span>
-            ) : null}
-          </div>
-
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            nodeTypes={nodeTypes}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
-            fitView={nodes.length > 0}
-            deleteKeyCode={["Backspace", "Delete"]}
-            proOptions={{ hideAttribution: true }}
-            nodesDraggable
-            nodesConnectable
-          >
-            <Background color="#dedbd4" gap={18} size={1.3} variant={BackgroundVariant.Dots} />
-            <Controls position="bottom-left" />
-            <MiniMap
-              position="bottom-right"
-              pannable
-              zoomable
-              nodeColor={(node) => (node.data?.kind === "crop" ? "#7c8cff" : node.data?.kind === "gemini" ? "#ffb15f" : "#191919")}
-            />
-          </ReactFlow>
-
-          {nodes.length === 0 ? (
-            <div className="pointer-events-none absolute inset-0 z-[5] flex items-center justify-center">
-              <div className="rounded-lg border border-dashed border-[#d9d8d2] bg-white/90 px-8 py-6 text-center shadow-sm">
-                <p className="text-sm font-medium text-[#333]">Your workflow is empty</p>
-                <p className="mt-2 text-sm text-[#77756f]">Click + below to add nodes and get started</p>
+      <main className="h-screen overflow-hidden bg-[#f6f7fb] text-[14px] text-[#1f2937]">
+        <div className="grid h-full grid-cols-[280px_minmax(0,1fr)_340px]">
+          <aside className="flex min-h-0 flex-col border-r border-[#d9dee8] bg-white">
+            <div className="border-b border-[#edf0f5] p-4">
+              <div className="flex items-center gap-2">
+                <div className="grid size-8 place-items-center rounded-md bg-[#1d4ed8] text-[11px] font-semibold text-white">WF</div>
+                <div className="min-w-0">
+                  <h1 className="truncate text-[14px] font-semibold text-[#111827]">Node Palette</h1>
+                  <p className="text-[11px] text-[#6b7280]">Drag nodes onto the canvas</p>
+                </div>
               </div>
+              <input
+                className="mt-4 w-full rounded-md border border-[#d9dee8] bg-[#f9fafb] px-3 py-2 text-[14px] text-[#111827] outline-none transition focus:border-[#2563eb] focus:bg-white"
+                placeholder="Search node types"
+                value={paletteQuery}
+                onChange={(event) => setPaletteQuery(event.target.value)}
+              />
             </div>
-          ) : null}
 
-          <div className="absolute bottom-5 left-1/2 z-20 -translate-x-1/2">
-            <div className="relative flex items-center gap-2 rounded-md border border-[#dedbd4] bg-white px-2 py-2 shadow-lg">
-              <button className="grid size-8 place-items-center rounded-md bg-[#191919] text-lg font-semibold leading-none text-white" onClick={() => setPickerOpen((value) => !value)}>
-                +
-              </button>
-              <button className="rounded-md border border-[#e1dfd9] px-3 py-2 text-xs font-medium" onClick={() => setToast("Fit view is available in the bottom-left React Flow controls.")}>
-                Fit
-              </button>
-              {pickerOpen ? (
-                <div className="absolute bottom-14 left-1/2 w-72 -translate-x-1/2 rounded-md border border-[#dedbd4] bg-white p-2 shadow-xl">
-                  <input className="mb-2 w-full rounded-md border border-[#d9d8d2] px-3 py-2 text-sm outline-none" placeholder="Search nodes" />
-                  {NODE_PICKER.map((item) => (
-                    <button key={item.label} className="flex w-full items-center justify-between rounded-md px-3 py-2 text-left hover:bg-[#f7f7f5]" onClick={() => addNode(item.kind)}>
-                      <span className="text-sm font-medium">{item.label}</span>
-                      <span className="text-xs text-[#77756f]">{item.category}</span>
-                    </button>
-                  ))}
+            <div className="min-h-0 flex-1 overflow-y-auto p-4">
+              {groupedPalette.every((group) => group.items.length === 0) ? (
+                <div className="grid min-h-[220px] place-items-center rounded-md border border-dashed border-[#d9dee8] bg-[#f9fafb] p-5 text-center">
+                  <div>
+                    <div className="mx-auto grid size-10 place-items-center rounded-full bg-[#eef4ff] text-[12px] font-semibold text-[#2563eb]">SR</div>
+                    <p className="mt-3 text-[14px] font-medium text-[#111827]">No nodes found</p>
+                    <p className="mt-1 text-[12px] text-[#6b7280]">Try a different search term.</p>
+                  </div>
                 </div>
               ) : null}
+
+              <div className="space-y-5">
+                {groupedPalette.map((group) =>
+                  group.items.length ? (
+                    <section key={group.category}>
+                      <h2 className="mb-2 text-[12px] font-semibold uppercase text-[#6b7280]">{group.category}</h2>
+                      <div className="space-y-2">
+                        {group.items.map((item) => {
+                          const meta = NODE_KIND_META[item.kind];
+                          return (
+                            <button
+                              key={`${group.category}-${item.label}`}
+                              draggable
+                              className="flex w-full cursor-grab items-center gap-3 rounded-md border border-[#e1e6ef] bg-white px-3 py-2.5 text-left transition hover:border-[#2563eb] hover:bg-[#f8fbff] active:cursor-grabbing"
+                              onClick={() => addNode(item.kind)}
+                              onDragStart={(event) => onPaletteDragStart(event, item.kind)}
+                            >
+                              <span className="grid size-8 shrink-0 place-items-center rounded-md bg-[#eef4ff] text-[11px] font-semibold text-[#1d4ed8]">{item.icon}</span>
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-[14px] font-medium text-[#111827]">{item.label}</span>
+                                <span className="block truncate text-[11px] text-[#6b7280]">{item.hint}</span>
+                              </span>
+                              <span className="rounded-full px-2 py-0.5 text-[11px] font-medium text-white" style={{ backgroundColor: meta.accent }}>
+                                {meta.label}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  ) : null,
+                )}
+              </div>
             </div>
-          </div>
-        </section>
 
-        <aside className="flex flex-col border-l border-[#e0ded8] bg-white p-4">
-          <NodeConfigPanel node={selectedNode} onUpdate={updateNodeData} />
+            <div className="border-t border-[#edf0f5] p-4">
+              <div className="rounded-md border border-[#e1e6ef] bg-[#f9fafb] p-3">
+                <div className="text-[12px] font-semibold text-[#374151]">Status</div>
+                <p className="mt-1 text-[12px] text-[#6b7280]">{toast}</p>
+              </div>
+            </div>
+          </aside>
 
-          <div className="mb-4">
-            <h2 className="text-sm font-semibold">Workflow History</h2>
-            <p className="text-xs text-[#77756f]">Runs include scope, duration, status, and node-level details.</p>
-          </div>
+          <section className="relative min-w-0" ref={flowWrapperRef} onDragOver={onCanvasDragOver} onDrop={onCanvasDrop}>
+            <div className="absolute inset-x-0 top-0 z-20 border-b border-[#d9dee8] bg-white/95 px-4 py-3 backdrop-blur">
+              <div className="flex items-center gap-3">
+                <a className="rounded-md px-2 py-1 text-[12px] font-medium text-[#6b7280] hover:bg-[#f3f6fb] hover:text-[#111827]" href="/dashboard">
+                  Dashboard
+                </a>
+                <input
+                  className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-2 py-1 text-[14px] font-semibold text-[#111827] outline-none hover:border-[#d9dee8] focus:border-[#2563eb] focus:bg-white"
+                  value={draftWorkflowName}
+                  onChange={(event) => setDraftWorkflowName(event.target.value)}
+                  onBlur={() => setDraftWorkflowName((value) => value.trim() || workflowName)}
+                  aria-label="Workflow name"
+                />
+                <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium ${saveStatusTone}`}>{saveStatusText}</span>
+                <button className="rounded-md border border-[#16a34a] bg-[#16a34a] px-4 py-2 text-[14px] font-semibold text-white transition hover:bg-[#15803d]" onClick={() => runWorkflow("full")}>
+                  Run
+                </button>
+                <button className="rounded-md border border-[#d9dee8] px-3 py-2 text-[12px] font-medium text-[#374151] transition hover:border-[#2563eb] hover:text-[#1d4ed8]" onClick={() => runWorkflow("selected")}>
+                  Run selected
+                </button>
+                <div className="relative">
+                  <button className="grid size-9 place-items-center rounded-md border border-[#d9dee8] text-[16px] font-semibold text-[#374151] transition hover:border-[#2563eb] hover:text-[#1d4ed8]" onClick={() => setMenuOpen((value) => !value)} aria-label="Workflow menu">
+                    ...
+                  </button>
+                  {menuOpen ? (
+                    <div className="absolute right-0 top-11 z-30 w-44 rounded-md border border-[#d9dee8] bg-white p-1 shadow-lg">
+                      <button className="w-full rounded px-3 py-2 text-left text-[12px] text-[#374151] hover:bg-[#f3f6fb]" onClick={exportJson}>Export JSON</button>
+                      <button className="w-full rounded px-3 py-2 text-left text-[12px] text-[#374151] hover:bg-[#f3f6fb]" onClick={() => fileInputRef.current?.click()}>Import JSON</button>
+                      <button className="w-full rounded px-3 py-2 text-left text-[12px] text-[#374151] hover:bg-[#f3f6fb]" onClick={loadSampleWorkflow}>Load sample</button>
+                      <button className="w-full rounded px-3 py-2 text-left text-[12px] text-[#a83232] hover:bg-[#fff1f1]" onClick={deleteSelected}>Delete selected</button>
+                    </div>
+                  ) : null}
+                </div>
+                <input
+                  ref={fileInputRef}
+                  className="hidden"
+                  type="file"
+                  accept="application/json"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) importJson(file);
+                  }}
+                />
+              </div>
+            </div>
 
-          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
-            {historyRuns.length === 0 ? (
-              <div className="rounded-md border border-dashed border-[#d9d8d2] bg-[#fbfbf9] p-4 text-sm text-[#77756f]">
-                No runs yet. Execute the workflow to see history here.
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              nodeTypes={nodeTypes}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onConnect={onConnect}
+              onInit={setFlowInstance}
+              fitView={nodes.length > 0}
+              deleteKeyCode={["Backspace", "Delete"]}
+              proOptions={{ hideAttribution: true }}
+              nodesDraggable
+              nodesConnectable
+            >
+              <Background color="#cfd7e6" gap={18} size={1.2} variant={BackgroundVariant.Dots} />
+              <Controls position="bottom-left" showInteractive={false} />
+              <MiniMap
+                position="bottom-right"
+                pannable
+                zoomable
+                maskColor="rgba(246, 247, 251, 0.72)"
+                nodeBorderRadius={8}
+                nodeColor={(node) => NODE_KIND_META[(node.data?.kind as NodeKind) ?? "request"]?.accent ?? "#2563eb"}
+              />
+            </ReactFlow>
+
+            {nodes.length === 0 ? (
+              <div className="pointer-events-none absolute inset-0 z-[5] grid place-items-center pt-16">
+                <div className="rounded-md border border-dashed border-[#cfd7e6] bg-white/92 px-8 py-6 text-center shadow-sm">
+                  <div className="mx-auto grid size-12 place-items-center rounded-full bg-[#eef4ff] text-[12px] font-semibold text-[#2563eb]">CN</div>
+                  <p className="mt-3 text-[14px] font-semibold text-[#111827]">Canvas is empty</p>
+                  <p className="mt-1 text-[12px] text-[#6b7280]">Drag a node from the palette to start building.</p>
+                </div>
               </div>
             ) : null}
-            {historyRuns.map((run) => (
-              <div key={run.id} className="rounded-md border border-[#e6e4df] bg-[#fbfbf9]">
-                <button className="w-full px-3 py-3 text-left" onClick={() => setExpandedRun(expandedRun === run.id ? null : run.id)}>
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="truncate text-sm font-medium">Run {run.id}</span>
-                    <span className={`rounded-full px-2 py-1 text-[10px] font-medium ${historyStatusClass(run.status)}`}>
-                      {run.status}
-                    </span>
-                  </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[#77756f]">
-                    <span>{run.startedAtLabel}</span>
-                    <span>{formatDurationMs(run.durationMs)}</span>
-                    <span>{run.nodeCount} {run.nodeCount === 1 ? "node" : "nodes"}</span>
-                  </div>
-                </button>
-                {expandedRun === run.id ? (
-                  <div className="border-t border-[#e6e4df] px-3 py-3">
-                    {run.nodes.length === 0 ? (
-                      <div className="text-xs text-[#77756f]">No node results were recorded for this run.</div>
-                    ) : null}
-                    {run.nodes.map((node) => (
-                      <div key={`${run.id}-${node.id}`} className="grid grid-cols-[auto_1fr] gap-2 py-1.5 text-xs">
-                        <span className={`mt-0.5 rounded px-1.5 py-0.5 text-[9px] font-medium ${historyStatusClass(node.status)}`}>
-                          {node.status}
-                        </span>
-                        <div className="min-w-0">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="truncate font-medium">{node.title}</span>
-                            <span className="shrink-0 text-[#77756f]">{formatDurationMs(node.durationMs)}</span>
-                          </div>
-                          <p className="mt-0.5 truncate text-[#77756f]">{node.output}</p>
-                        </div>
-                      </div>
-                    ))}
+
+            <div className="absolute bottom-5 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-md border border-[#d9dee8] bg-white px-2 py-2 shadow-lg">
+              <button className="rounded-md border border-[#d9dee8] px-3 py-2 text-[12px] font-medium text-[#374151] hover:border-[#2563eb]" disabled={undoStack.length === 0} onClick={undo}>
+                Undo
+              </button>
+              <button className="rounded-md border border-[#d9dee8] px-3 py-2 text-[12px] font-medium text-[#374151] hover:border-[#2563eb]" disabled={redoStack.length === 0} onClick={redo}>
+                Redo
+              </button>
+              <button className="rounded-md border border-[#d9dee8] px-3 py-2 text-[12px] font-medium text-[#374151] hover:border-[#2563eb]" disabled={saveStatus === "saving"} onClick={() => void saveWorkflow()}>
+                Save
+              </button>
+              <button className="rounded-md border border-[#d9dee8] px-3 py-2 text-[12px] font-medium text-[#374151] hover:border-[#2563eb]" onClick={() => runWorkflow("single")}>
+                Run node
+              </button>
+            </div>
+          </section>
+
+          <aside className="flex min-h-0 flex-col border-l border-[#d9dee8] bg-white">
+            <div className="border-b border-[#edf0f5] p-4">
+              <NodeConfigPanel node={selectedNode} onUpdate={updateNodeData} />
+            </div>
+
+            <div className="flex min-h-0 flex-1 flex-col p-4">
+              <div className="mb-3">
+                <h2 className="text-[14px] font-semibold text-[#111827]">Run History</h2>
+                <p className="text-[12px] text-[#6b7280]">Recent workflow executions and node results.</p>
+              </div>
+
+              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+                {historyRuns.length === 0 ? (
+                  <div className="grid min-h-[220px] place-items-center rounded-md border border-dashed border-[#d9dee8] bg-[#f9fafb] p-5 text-center">
+                    <div>
+                      <div className="mx-auto grid size-10 place-items-center rounded-full bg-[#eef4ff] text-[12px] font-semibold text-[#2563eb]">RH</div>
+                      <p className="mt-3 text-[14px] font-medium text-[#111827]">No runs yet</p>
+                      <p className="mt-1 text-[12px] text-[#6b7280]">Run the workflow to populate history.</p>
+                    </div>
                   </div>
                 ) : null}
+
+                {historyRuns.map((run) => {
+                  const expanded = expandedRun === run.id;
+                  const dotClass = run.status === "success" ? "bg-[#16a34a]" : run.status === "failed" ? "bg-[#dc2626]" : "bg-[#f59e0b]";
+                  return (
+                    <div key={run.id} className="rounded-md border border-[#e1e6ef] bg-white">
+                      <button className="w-full px-3 py-3 text-left" onClick={() => setExpandedRun(expanded ? null : run.id)}>
+                        <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3">
+                          <span className={`size-2.5 rounded-full ${dotClass}`} />
+                          <div className="min-w-0">
+                            <div className="truncate text-[14px] font-medium text-[#111827]">{draftWorkflowName}</div>
+                            <div className="mt-0.5 flex items-center gap-2 text-[11px] text-[#6b7280]">
+                              <span>{run.startedAtLabel}</span>
+                              <span>{run.nodeCount} {run.nodeCount === 1 ? "node" : "nodes"}</span>
+                            </div>
+                          </div>
+                          <span className="rounded-full bg-[#f3f6fb] px-2 py-1 text-[11px] font-medium text-[#374151]">{formatDurationMs(run.durationMs)}</span>
+                        </div>
+                      </button>
+                      <div className={`grid transition-[grid-template-rows] duration-200 ease-out ${expanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}>
+                        <div className="overflow-hidden">
+                          <div className="border-t border-[#edf0f5] px-3 py-3">
+                            {run.nodes.length === 0 ? (
+                              <div className="grid min-h-[96px] place-items-center rounded-md bg-[#f9fafb] text-center">
+                                <div>
+                                  <div className="mx-auto grid size-8 place-items-center rounded-full bg-[#eef4ff] text-[11px] font-semibold text-[#2563eb]">NR</div>
+                                  <p className="mt-2 text-[12px] text-[#6b7280]">No node output recorded.</p>
+                                </div>
+                              </div>
+                            ) : null}
+                            {run.nodes.map((node) => (
+                              <div key={`${run.id}-${node.id}`} className="grid grid-cols-[auto_1fr] gap-2 py-1.5 text-[12px]">
+                                <span className={`mt-1 size-2 rounded-full ${node.status === "success" ? "bg-[#16a34a]" : node.status === "failed" ? "bg-[#dc2626]" : "bg-[#f59e0b]"}`} />
+                                <div className="min-w-0">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="truncate font-medium text-[#374151]">{node.title}</span>
+                                    <span className="shrink-0 rounded-full bg-[#f3f6fb] px-2 py-0.5 text-[11px] text-[#6b7280]">{formatDurationMs(node.durationMs)}</span>
+                                  </div>
+                                  <p className="mt-0.5 truncate text-[11px] text-[#6b7280]">{node.output}</p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            ))}
-          </div>
-        </aside>
-      </div>
-    </main>
+            </div>
+          </aside>
+        </div>
+      </main>
     </WorkflowEditorContext.Provider>
   );
 }
+
 

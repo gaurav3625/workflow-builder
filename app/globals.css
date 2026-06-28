@@ -32,41 +32,57 @@ body {
 }
 
 .workflow-card {
-  width: 230px;
-  border: 1px solid #e4e1da;
-  border-left-width: 3px;
+  width: 248px;
+  overflow: hidden;
+  border: 1px solid #dfe5ee;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.96);
-  padding: 12px;
-  box-shadow: 0 10px 26px rgba(31, 31, 31, 0.08);
-  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.workflow-card:hover {
+  border-color: #b8c7dd;
 }
 
 .workflow-card-selected {
-  border-color: #8f87ff;
-  border-left-color: #8f87ff;
-  box-shadow: 0 0 0 2px rgba(143, 135, 255, 0.18), 0 12px 30px rgba(31, 31, 31, 0.12);
+  border: 2px solid #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.workflow-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border-bottom: 1px solid #edf0f5;
+  padding: 12px;
+}
+
+.workflow-card-body {
+  padding: 12px;
+}
+
+.workflow-card-footer {
+  border-top: 1px solid #edf0f5;
+  background: #fcfdff;
+  padding: 10px 12px 12px;
 }
 
 .workflow-card.node-idle {
-  border-left-color: #dedbd4;
+  border-color: #dfe5ee;
 }
 
 .workflow-card.node-running {
-  border-color: #8f87ff;
-  border-left-color: #5947ca;
-  box-shadow: 0 0 0 1px rgba(143, 135, 255, 0.2), 0 0 22px rgba(107, 92, 255, 0.42), 0 12px 30px rgba(31, 31, 31, 0.1);
-  animation: nextflow-pulse 1.15s ease-in-out infinite;
+  border-color: #93b4ff;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
 }
 
 .workflow-card.node-success {
   border-color: #9ed8b3;
-  border-left-color: #257942;
 }
 
 .workflow-card.node-error {
   border-color: #e6a1a1;
-  border-left-color: #a83232;
 }
 
 .node-spinner {
@@ -107,4 +123,28 @@ body {
   50% {
     transform: translateY(-2px);
   }
+}
+
+.react-flow__controls {
+  overflow: hidden;
+  border: 1px solid #d9dee8;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+}
+
+.react-flow__controls-button {
+  border-bottom-color: #edf0f5;
+  color: #374151;
+}
+
+.react-flow__minimap {
+  border: 1px solid #d9dee8;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
