@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Handle, Position, type NodeProps } from "reactflow";
 import { useWorkflowEditor } from "./context";
 import type { FlowNodeData, PortKind, RunStatus } from "./types";
@@ -25,7 +25,7 @@ function StatusBadge({ status = "idle" }: { status?: RunStatus }) {
   if (status === "success") {
     return (
       <div className="rounded bg-[#ecf8ef] px-1.5 py-0.5 text-[10px] font-medium text-[#257942]">
-        ✓ Done
+        &#10003; Done
       </div>
     );
   }
@@ -33,7 +33,7 @@ function StatusBadge({ status = "idle" }: { status?: RunStatus }) {
   if (status === "error") {
     return (
       <div className="rounded bg-[#fdecec] px-1.5 py-0.5 text-[10px] font-medium text-[#a83232]">
-        ✗ Error
+        &#10007; Error
       </div>
     );
   }
@@ -48,7 +48,7 @@ function StatusBadge({ status = "idle" }: { status?: RunStatus }) {
 function truncateOutput(value: string, max = 120) {
   const trimmed = value.trim();
   if (trimmed.length <= max) return trimmed;
-  return `${trimmed.slice(0, max)}…`;
+  return `${trimmed.slice(0, max)}...`;
 }
 
 function ExecutionOutputSection({ data }: { data: FlowNodeData }) {
@@ -158,7 +158,9 @@ function EditableTitle({ nodeId, title }: { nodeId: string; title: string }) {
   const [draft, setDraft] = useState(title);
 
   useEffect(() => {
-    if (!editing) setDraft(title);
+    if (editing) return;
+    const timer = setTimeout(() => setDraft(title), 0);
+    return () => clearTimeout(timer);
   }, [editing, title]);
 
   const commit = useCallback(() => {
@@ -205,7 +207,7 @@ export default function WorkflowNode({ id, data, selected }: NodeProps<FlowNodeD
   const isGemini = data.kind === "gemini";
   const isRequest = data.kind === "request";
   const isResponse = data.kind === "response";
-  const crop = data.crop ?? { x: 0, y: 0, width: 100, height: 100 };
+  const crop = useMemo(() => data.crop ?? { x: 0, y: 0, width: 100, height: 100 }, [data.crop]);
   const status = data.status ?? "idle";
 
   const patch = useCallback(

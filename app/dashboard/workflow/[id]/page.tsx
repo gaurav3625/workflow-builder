@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { notFound } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
 import WorkflowCanvas from "@/components/WorkflowCanvas";
+import type { FlowEdge, FlowNode } from "@/components/workflow/types";
 
 interface Props {
   params: Promise<{
@@ -30,13 +31,15 @@ export default async function WorkflowPage({ params }: Props) {
   }
 
   const flowData = workflow.flowData;
+  const flowRecord =
+    flowData && typeof flowData === "object" && !Array.isArray(flowData)
+      ? (flowData as Record<string, unknown>)
+      : null;
   const initialFlow =
-    flowData && typeof flowData === "object" && !Array.isArray(flowData) &&
-    Array.isArray((flowData as any).nodes) &&
-    Array.isArray((flowData as any).edges)
+    flowRecord && Array.isArray(flowRecord.nodes) && Array.isArray(flowRecord.edges)
       ? {
-          nodes: (flowData as any).nodes,
-          edges: (flowData as any).edges,
+          nodes: flowRecord.nodes as FlowNode[],
+          edges: flowRecord.edges as FlowEdge[],
         }
       : null;
 
@@ -63,6 +66,15 @@ export default async function WorkflowPage({ params }: Props) {
       hour: "numeric",
       minute: "2-digit",
     }),
+    completedAt: run.finishedAt
+      ? run.finishedAt.toLocaleString("en", {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        })
+      : undefined,
     duration: run.durationMs ? `${(run.durationMs / 1000).toFixed(1)}s` : "-",
     nodes: run.nodeRuns.map((nodeRun) => ({
       id: nodeRun.nodeId,

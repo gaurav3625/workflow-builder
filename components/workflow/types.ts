@@ -47,6 +47,7 @@ export type HistoryRun = {
   scope: HistoryRunScopeLabel;
   status: "pending" | "running" | "success" | "failed" | "partial";
   startedAt: string;
+  completedAt?: string;
   duration: string;
   nodes: HistoryNode[];
 };
@@ -54,6 +55,8 @@ export type HistoryRun = {
 export type PersistedRun = {
   scope: "full" | "partial" | "single";
   status: "pending" | "running" | "success" | "failed" | "partial";
+  startedAt: string;
+  completedAt: string;
   nodes: HistoryNode[];
 };
 
@@ -61,7 +64,12 @@ export const RUNTIME_NODE_DATA_KEYS = ["status", "duration", "runOutput", "runEr
 
 export function sanitizeNodesForPersistence(nodes: FlowNode[]): FlowNode[] {
   return nodes.map((node) => {
-    const { status, duration, runOutput, runError, ...configData } = node.data;
+    const configData = { ...node.data };
+    delete configData.status;
+    delete configData.duration;
+    delete configData.runOutput;
+    delete configData.runError;
+
     return {
       ...node,
       data: configData,

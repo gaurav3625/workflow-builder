@@ -314,7 +314,12 @@ function cloneSnapshot(nodes: FlowNode[], edges: FlowEdge[]): Snapshot {
 
 function normalizeFlowNodes(nodes: FlowNode[]): FlowNode[] {
   return nodes.map((node) => {
-    const { status, duration, runOutput, runError, ...configData } = node.data;
+    const configData = { ...node.data };
+    delete configData.status;
+    delete configData.duration;
+    delete configData.runOutput;
+    delete configData.runError;
+
     return {
       ...node,
       id: String(node.id).trim(),
@@ -369,46 +374,87 @@ export default function WorkflowCanvas({
   const [toast, setToast] = useState("Ready");
   const [undoStack, setUndoStack] = useState<Snapshot[]>([]);
   const [redoStack, setRedoStack] = useState<Snapshot[]>([]);
-  const [runCounter, setRunCounter] = useState(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const loggedRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout>[]>([]);
-  const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [saveRequest, setSaveRequest] = useState(0);
+  const latestFlowRef = useRef({ nodes: initialSnapshot.nodes, edges: initialSnapshot.edges });
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const saveWorkflow = useCallback(async () => {
-    setSaving(true);
-    try {
-      const response = await fetch(`/api/workflow/${workflowId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          nodes: sanitizeNodesForPersistence(nodes),
-          edges,
-        }),
-      });
+  useEffect(() => {
+    latestFlowRef.current = { nodes, edges };
+  }, [edges, nodes]);
 
-      if (!response.ok) {
-        throw new Error("Save failed");
+  const markCanvasChanged = useCallback(() => {
+    setSaveStatus("saving");
+    setSaveRequest((value) => value + 1);
+  }, []);
+
+  const saveWorkflow = useCallback(
+    async (showToast = true) => {
+      setSaveStatus("saving");
+      try {
+        const { nodes: latestNodes, edges: latestEdges } = latestFlowRef.current;
+        const response = await fetch(`/api/workflow/${workflowId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nodes: sanitizeNodesForPersistence(latestNodes),
+            edges: latestEdges,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error("Save failed");
+        }
+
+        setSaveStatus("saved");
+        if (showToast) setToast("Workflow saved.");
+        return true;
+      } catch {
+        setSaveStatus("error");
+        if (showToast) setToast("Unable to save workflow. Check your network.");
+        return false;
       }
+    },
+    [workflowId],
+  );
 
-      setToast("Workflow saved.");
+  const fetchHistoryRuns = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/workflow/${workflowId}`, { method: "GET" });
+      if (!response.ok) return;
+      const payload = (await response.json()) as { runs?: HistoryRun[] };
+      if (Array.isArray(payload.runs)) {
+        setHistoryRuns(payload.runs);
+      }
     } catch {
-      setToast("Unable to save workflow. Check your network.");
-    } finally {
-      setSaving(false);
+      // Keep the last known persisted history if a poll fails.
     }
-  }, [edges, nodes, workflowId]);
+  }, [workflowId]);
 
   const persistRun = useCallback(
     async (run: PersistedRun) => {
       try {
-        await fetch(`/api/workflow/${workflowId}`, {
+        const response = await fetch(`/api/workflow/${workflowId}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(run),
         });
+
+        if (!response.ok) {
+          throw new Error("Run persistence failed");
+        }
+
+        const payload = (await response.json()) as { runId?: string; runs?: HistoryRun[] };
+        if (Array.isArray(payload.runs)) {
+          setHistoryRuns(payload.runs);
+        }
+        return payload.runId;
       } catch {
-        // Silently ignore persistence failures while keeping local UI state.
+        setToast("Run complete, but history persistence failed.");
+        return undefined;
       }
     },
     [workflowId],
@@ -423,8 +469,35 @@ export default function WorkflowCanvas({
   useEffect(() => {
     return () => {
       timerRef.current.forEach(clearTimeout);
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (saveRequest === 0) return;
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = setTimeout(() => {
+      void saveWorkflow(false);
+    }, 1500);
+
+    return () => {
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    };
+  }, [saveRequest, saveWorkflow]);
+
+  useEffect(() => {
+    const initialFetch = setTimeout(() => {
+      void fetchHistoryRuns();
+    }, 0);
+    const interval = setInterval(() => {
+      void fetchHistoryRuns();
+    }, 5000);
+
+    return () => {
+      clearTimeout(initialFetch);
+      clearInterval(interval);
+    };
+  }, [fetchHistoryRuns]);
 
   const selectedNodeIds = useMemo(() => nodes.filter((node) => node.selected).map((node) => node.id), [nodes]);
   const selectedNode = useMemo(
@@ -433,6 +506,7 @@ export default function WorkflowCanvas({
   );
 
   const updateNodeData = useCallback((nodeId: string, patch: Partial<FlowNode["data"]>) => {
+    markCanvasChanged();
     setNodes((current) =>
       current.map((node) =>
         node.id === nodeId
@@ -446,7 +520,7 @@ export default function WorkflowCanvas({
           : node,
       ),
     );
-  }, []);
+  }, [markCanvasChanged]);
 
   const editorContextValue = useMemo(() => ({ updateNodeData }), [updateNodeData]);
 
@@ -456,12 +530,18 @@ export default function WorkflowCanvas({
   }, [edges, nodes]);
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
+    if (changes.some((change) => change.type === "add" || change.type === "remove" || change.type === "position")) {
+      markCanvasChanged();
+    }
     setNodes((current) => applyNodeChanges(changes, current) as FlowNode[]);
-  }, []);
+  }, [markCanvasChanged]);
 
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
+    if (changes.some((change) => change.type === "add" || change.type === "remove")) {
+      markCanvasChanged();
+    }
     setEdges((current) => applyEdgeChanges(changes, current) as FlowEdge[]);
-  }, []);
+  }, [markCanvasChanged]);
 
   const onConnect = useCallback(
     (connection: Connection) => {
@@ -482,6 +562,7 @@ export default function WorkflowCanvas({
       }
 
       pushUndo();
+      markCanvasChanged();
       const sourceNode = nodes.find((node) => node.id === normalizedConnection.source);
       const kind = getPortKind(sourceNode, normalizedConnection.sourceHandle) ?? "text";
       setEdges((current) =>
@@ -497,7 +578,7 @@ export default function WorkflowCanvas({
       );
       setToast("Connection added.");
     },
-    [edges, nodes, pushUndo],
+    [edges, markCanvasChanged, nodes, pushUndo],
   );
 
   const addNode = useCallback(
@@ -515,6 +596,7 @@ export default function WorkflowCanvas({
       }
 
       pushUndo();
+      markCanvasChanged();
       const count = nodes.filter((node) => node.data.kind === kind).length + 1;
       setNodes((current) => [...current, makeAddedNode(kind, count)]);
       setPickerOpen(false);
@@ -526,15 +608,16 @@ export default function WorkflowCanvas({
       };
       setToast(`${labels[kind]} node added.`);
     },
-    [nodes, pushUndo],
+    [markCanvasChanged, nodes, pushUndo],
   );
 
   const loadSampleWorkflow = useCallback(() => {
     pushUndo();
+    markCanvasChanged();
     setNodes(normalizeFlowNodes(SAMPLE_NODES));
     setEdges(normalizeFlowEdges(SAMPLE_EDGES));
     setToast("Sample workflow loaded.");
-  }, [pushUndo]);
+  }, [markCanvasChanged, pushUndo]);
 
   const deleteSelected = useCallback(() => {
     const removable = new Set(selectedNodeIds.filter((id) => !REQUIRED_NODE_IDS.has(id)));
@@ -543,34 +626,37 @@ export default function WorkflowCanvas({
       return;
     }
     pushUndo();
+    markCanvasChanged();
     setNodes((current) => current.filter((node) => !removable.has(node.id)));
     setEdges((current) => current.filter((item) => !removable.has(item.source) && !removable.has(item.target)));
     setToast("Selected node deleted.");
-  }, [pushUndo, selectedNodeIds]);
+  }, [markCanvasChanged, pushUndo, selectedNodeIds]);
 
   const undo = useCallback(() => {
     setUndoStack((stack) => {
       const previous = stack.at(-1);
       if (!previous) return stack;
       setRedoStack((redo) => [...redo, cloneSnapshot(nodes, edges)]);
+      markCanvasChanged();
       setNodes(previous.nodes);
       setEdges(previous.edges);
       setToast("Undo applied.");
       return stack.slice(0, -1);
     });
-  }, [edges, nodes]);
+  }, [edges, markCanvasChanged, nodes]);
 
   const redo = useCallback(() => {
     setRedoStack((stack) => {
       const next = stack.at(-1);
       if (!next) return stack;
       setUndoStack((undoItems) => [...undoItems, cloneSnapshot(nodes, edges)]);
+      markCanvasChanged();
       setNodes(next.nodes);
       setEdges(next.edges);
       setToast("Redo applied.");
       return stack.slice(0, -1);
     });
-  }, [edges, nodes]);
+  }, [edges, markCanvasChanged, nodes]);
 
   const updateNodeRunState = useCallback(
     (
@@ -647,6 +733,7 @@ export default function WorkflowCanvas({
         return;
       }
 
+      const runStartedAt = new Date();
       resetRunState(targetIds);
       const executableIds = targetIds.filter((id) => id !== "request-inputs" && id !== "response");
 
@@ -703,23 +790,14 @@ export default function WorkflowCanvas({
                 runOutput: responseNode ? buildRunOutput(responseNode) : undefined,
               });
             }
-            const nextRunNumber = runCounter + 1;
-            const runId = String(nextRunNumber);
-            setRunCounter(nextRunNumber);
+            const runCompletedAt = new Date();
             const runScope: PersistedRun["scope"] =
               scope === "full" ? "full" : scope === "selected" ? "partial" : "single";
-            const uiRun: HistoryRun = {
-              id: runId,
-              scope: scope === "full" ? "Full Workflow" : scope === "selected" ? "Multi-select" : "Single Node",
+            const persistedRun: PersistedRun = {
+              scope: runScope,
               status: "success",
-              startedAt: new Intl.DateTimeFormat("en", {
-                month: "short",
-                day: "numeric",
-                year: "numeric",
-                hour: "numeric",
-                minute: "2-digit",
-              }).format(new Date()),
-              duration: executableIds.some((id) => nodes.find((item) => item.id === id)?.data.kind === "crop") ? "31.8s" : "4.5s",
+              startedAt: runStartedAt.toISOString(),
+              completedAt: runCompletedAt.toISOString(),
               nodes: targetIds.map((id) => {
                 const node = nodes.find((item) => item.id === id);
                 const duration =
@@ -734,16 +812,13 @@ export default function WorkflowCanvas({
               }),
             };
 
-            const persistedRun = {
-              scope: runScope,
-              status: uiRun.status,
-              nodes: uiRun.nodes,
-            };
-
-            setHistoryRuns((current) => [uiRun, ...current]);
-            setExpandedRun(runId);
-            setToast("Run complete. History entry created.");
-            void persistRun(persistedRun);
+            setToast("Run complete. Saving history...");
+            void persistRun(persistedRun).then((runId) => {
+              if (runId) {
+                setExpandedRun(runId);
+                setToast("Run complete. History entry saved.");
+              }
+            });
           }
           return;
         }
@@ -783,7 +858,7 @@ export default function WorkflowCanvas({
         }, 250),
       );
     },
-    [edges, nodes, persistRun, resetRunState, runCounter, selectedNodeIds, updateNodeRunState],
+    [edges, nodes, persistRun, resetRunState, selectedNodeIds, updateNodeRunState],
   );
 
   const exportJson = useCallback(() => {
@@ -801,6 +876,7 @@ export default function WorkflowCanvas({
           throw new Error("Invalid workflow file");
         }
         pushUndo();
+        markCanvasChanged();
         setNodes(normalizeFlowNodes(parsed.nodes));
         setEdges(normalizeFlowEdges(parsed.edges));
         setToast("Workflow JSON imported.");
@@ -809,7 +885,10 @@ export default function WorkflowCanvas({
       }
     };
     reader.readAsText(file);
-  }, [pushUndo]);
+  }, [markCanvasChanged, pushUndo]);
+
+  const saveStatusText =
+    saveStatus === "saving" ? "Saving..." : saveStatus === "saved" ? "Saved \u2713" : saveStatus === "error" ? "Save failed" : "";
 
   return (
     <WorkflowEditorContext.Provider value={editorContextValue}>
@@ -844,8 +923,8 @@ export default function WorkflowCanvas({
                 Redo
               </button>
             </div>
-            <button className="w-full rounded-md border border-[#191919] bg-[#191919] px-2 py-2 text-xs font-medium text-white hover:bg-[#343434] disabled:cursor-not-allowed disabled:opacity-50" disabled={saving} onClick={saveWorkflow}>
-              {saving ? "Saving..." : "Save workflow"}
+            <button className="w-full rounded-md border border-[#191919] bg-[#191919] px-2 py-2 text-xs font-medium text-white hover:bg-[#343434] disabled:cursor-not-allowed disabled:opacity-50" disabled={saveStatus === "saving"} onClick={() => void saveWorkflow()}>
+              {saveStatus === "saving" ? "Saving..." : "Save workflow"}
             </button>
             <button className="w-full rounded-md border border-[#f0c5c5] px-2 py-2 text-xs font-medium text-[#a83232] hover:bg-[#fff6f6]" onClick={deleteSelected}>
               Delete selected
@@ -893,6 +972,11 @@ export default function WorkflowCanvas({
             </a>
             <span className="text-[#c4c1b9]">/</span>
             <span className="text-xs text-[#77756f]">Trial Task Workflow</span>
+            {saveStatusText ? (
+              <span className={`ml-2 rounded-full px-2 py-0.5 text-[11px] font-medium ${saveStatus === "error" ? "bg-[#fff1f1] text-[#a83232]" : "bg-[#f3f2ee] text-[#55524b]"}`}>
+                {saveStatusText}
+              </span>
+            ) : null}
           </div>
 
           <ReactFlow
@@ -998,4 +1082,3 @@ export default function WorkflowCanvas({
     </WorkflowEditorContext.Provider>
   );
 }
-
