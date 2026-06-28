@@ -185,7 +185,7 @@ function edge(source: string, sourceHandle: string, target: string, targetHandle
     animated: true,
     markerEnd: { type: MarkerType.ArrowClosed },
     data: { kind },
-    style: { stroke: kind === "image" ? "#7c8cff" : "#ff9b38", strokeWidth: 2 },
+    style: { stroke: kind === "image" ? "#7f8bd8" : "#aeb6c4", strokeWidth: 1.75 },
   };
 }
 
@@ -440,7 +440,7 @@ function normalizeFlowEdges(edges: FlowEdge[]): FlowEdge[] {
       animated: item.animated ?? true,
       markerEnd: item.markerEnd ?? { type: MarkerType.ArrowClosed },
       data: { kind, ...(item.data ?? {}) },
-      style: item.style ?? { stroke: kind === "image" ? "#7c8cff" : "#ff9b38", strokeWidth: 2 },
+      style: item.style ?? { stroke: kind === "image" ? "#7f8bd8" : "#aeb6c4", strokeWidth: 1.75 },
     };
   });
 }
@@ -710,7 +710,7 @@ export default function WorkflowCanvas({
             animated: true,
             markerEnd: { type: MarkerType.ArrowClosed },
             data: { kind },
-            style: { stroke: kind === "image" ? "#7c8cff" : "#ff9b38", strokeWidth: 2 },
+            style: { stroke: kind === "image" ? "#7f8bd8" : "#aeb6c4", strokeWidth: 1.75 },
           },
           current,
         ) as FlowEdge[],
@@ -1066,19 +1066,19 @@ export default function WorkflowCanvas({
 
   return (
     <WorkflowEditorContext.Provider value={editorContextValue}>
-      <main className="h-screen overflow-hidden bg-[#f6f7fb] text-[14px] text-[#1f2937]">
+      <main className="h-screen overflow-hidden bg-[#f7f8fa] text-[14px] text-[#171717]">
         <div className="grid h-full grid-cols-[280px_minmax(0,1fr)_340px]">
-          <aside className="flex min-h-0 flex-col border-r border-[#d9dee8] bg-white">
-            <div className="border-b border-[#edf0f5] p-4">
+          <aside className="flex min-h-0 flex-col border-r border-[#e3e7ee] bg-[#f7f8fa]">
+            <div className="border-b border-[#e8ecf2] p-4">
               <div className="flex items-center gap-2">
-                <div className="grid size-8 place-items-center rounded-md bg-[#1d4ed8] text-[11px] font-semibold text-white">WF</div>
+                <div className="grid size-8 place-items-center rounded-[10px] bg-[#171717] text-[11px] font-semibold text-white">M</div>
                 <div className="min-w-0">
-                  <h1 className="truncate text-[14px] font-semibold text-[#111827]">Node Palette</h1>
-                  <p className="text-[11px] text-[#6b7280]">Drag nodes onto the canvas, then connect handles</p>
+                  <h1 className="truncate text-[14px] font-semibold text-[#171717]">Flow</h1>
+                  <p className="text-[11px] text-[#737373]">Drag nodes, connect ports on the canvas</p>
                 </div>
               </div>
               <input
-                className="mt-4 w-full rounded-md border border-[#d9dee8] bg-[#f9fafb] px-3 py-2 text-[14px] text-[#111827] outline-none transition focus:border-[#2563eb] focus:bg-white"
+                className="mt-4 w-full rounded-[10px] border border-[#e5e5e5] bg-white px-3 py-2 text-[14px] text-[#171717] outline-none transition focus:border-[#6366f1]"
                 placeholder="Search node types"
                 value={paletteQuery}
                 onChange={(event) => setPaletteQuery(event.target.value)}
@@ -1138,14 +1138,14 @@ export default function WorkflowCanvas({
             </div>
           </aside>
 
-          <section className="relative min-w-0" ref={flowWrapperRef} onDragOver={onCanvasDragOver} onDrop={onCanvasDrop}>
-            <div className="absolute inset-x-0 top-0 z-20 border-b border-[#d9dee8] bg-white/95 px-4 py-3 backdrop-blur">
+          <section className="relative min-w-0 bg-white" ref={flowWrapperRef} onDragOver={onCanvasDragOver} onDrop={onCanvasDrop}>
+            <div className="absolute inset-x-0 top-0 z-20 border-b border-[#e8ecf2] bg-white px-4 py-3">
               <div className="flex items-center gap-3">
-                <a className="rounded-md px-2 py-1 text-[12px] font-medium text-[#6b7280] hover:bg-[#f3f6fb] hover:text-[#111827]" href="/dashboard">
+                <a className="rounded-[8px] px-2 py-1 text-[12px] font-medium text-[#737373] hover:bg-[#f5f5f5] hover:text-[#171717]" href="/dashboard">
                   Dashboard
                 </a>
                 <input
-                  className="min-w-0 flex-1 rounded-md border border-[#d9dee8] bg-white px-2 py-1 text-[14px] font-semibold text-[#111827] outline-none focus:border-[#2563eb]"
+                  className="min-w-0 flex-1 rounded-[10px] border border-[#e5e5e5] bg-[#fafafa] px-3 py-1.5 text-[14px] font-semibold text-[#171717] outline-none focus:border-[#6366f1] focus:bg-white"
                   value={draftWorkflowName}
                   onChange={(event) => setDraftWorkflowName(event.target.value)}
                   onBlur={commitWorkflowName}
@@ -1162,14 +1162,14 @@ export default function WorkflowCanvas({
                   title="Edit workflow name (Enter to save, Escape to cancel)"
                 />
                 <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium ${saveStatusTone}`}>{saveStatusText}</span>
-                <button className="rounded-md border border-[#16a34a] bg-[#16a34a] px-4 py-2 text-[14px] font-semibold text-white transition hover:bg-[#15803d]" onClick={() => runWorkflow("full")}>
+                <button className="rounded-[10px] bg-[#171717] px-4 py-2 text-[14px] font-semibold text-white transition hover:bg-[#404040]" onClick={() => runWorkflow("full")}>
                   Run
                 </button>
-                <button className="rounded-md border border-[#d9dee8] px-3 py-2 text-[12px] font-medium text-[#374151] transition hover:border-[#2563eb] hover:text-[#1d4ed8]" onClick={() => runWorkflow("selected")}>
+                <button className="rounded-[10px] border border-[#e5e5e5] px-3 py-2 text-[12px] font-medium text-[#404040] transition hover:border-[#d4d4d4] hover:bg-[#fafafa]" onClick={() => runWorkflow("selected")}>
                   Run selected
                 </button>
                 <div className="relative">
-                  <button className="grid size-9 place-items-center rounded-md border border-[#d9dee8] text-[16px] font-semibold text-[#374151] transition hover:border-[#2563eb] hover:text-[#1d4ed8]" onClick={() => setMenuOpen((value) => !value)} aria-label="Workflow menu">
+                  <button className="grid size-9 place-items-center rounded-[10px] border border-[#e5e5e5] text-[16px] font-semibold text-[#404040] transition hover:bg-[#fafafa]" onClick={() => setMenuOpen((value) => !value)} aria-label="Workflow menu">
                     ...
                   </button>
                   {menuOpen ? (
@@ -1208,17 +1208,17 @@ export default function WorkflowCanvas({
               proOptions={{ hideAttribution: true }}
               nodesDraggable
               nodesConnectable
-              defaultEdgeOptions={{ type: "smoothstep", animated: true, markerEnd: { type: MarkerType.ArrowClosed }, style: { strokeWidth: 2 } }}
-              connectionLineStyle={{ stroke: "#2563eb", strokeWidth: 2 }}
+              defaultEdgeOptions={{ type: "smoothstep", animated: true, markerEnd: { type: MarkerType.ArrowClosed }, style: { strokeWidth: 1.75, stroke: "#aeb6c4" } }}
+              connectionLineStyle={{ stroke: "#6366f1", strokeWidth: 2 }}
               connectionLineType={ConnectionLineType.SmoothStep}
             >
-              <Background color="#cfd7e6" gap={18} size={1.2} variant={BackgroundVariant.Dots} />
+              <Background color="#d8dde6" gap={20} size={1} variant={BackgroundVariant.Dots} />
               <Controls position="bottom-left" showInteractive={false} />
               <MiniMap
                 position="bottom-right"
                 pannable
                 zoomable
-                maskColor="rgba(246, 247, 251, 0.72)"
+                maskColor="rgba(247, 248, 250, 0.72)"
                 nodeBorderRadius={8}
                 nodeColor={(node) => NODE_KIND_META[(node.data?.kind as NodeKind) ?? "request"]?.accent ?? "#2563eb"}
               />
@@ -1239,7 +1239,7 @@ export default function WorkflowCanvas({
               </div>
             ) : null}
 
-            <div className="absolute bottom-5 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-md border border-[#d9dee8] bg-white px-2 py-2 shadow-lg">
+            <div className="absolute bottom-5 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-[8px] border border-[#e3e7ee] bg-white px-2 py-2 shadow-[0_8px_24px_rgba(15,23,42,0.08)]">
               <button className="rounded-md border border-[#d9dee8] px-3 py-2 text-[12px] font-medium text-[#374151] hover:border-[#2563eb]" disabled={undoStack.length === 0} onClick={undo}>
                 Undo
               </button>
@@ -1255,7 +1255,7 @@ export default function WorkflowCanvas({
             </div>
           </section>
 
-          <aside className="flex min-h-0 flex-col border-l border-[#d9dee8] bg-white">
+          <aside className="flex min-h-0 flex-col border-l border-[#e3e7ee] bg-white">
             <div className="border-b border-[#edf0f5] p-4">
               <NodeConfigPanel node={selectedNode} onUpdate={updateNodeData} />
             </div>

@@ -5,24 +5,27 @@ import { Handle, Position, type NodeProps } from "reactflow";
 import { useWorkflowEditor } from "./context";
 import type { FlowNodeData, PortKind, RunStatus } from "./types";
 
-const NODE_KIND_META: Record<FlowNodeData["kind"], { label: string; icon: string; className: string }> = {
-  request: { label: "HTTP", icon: "IN", className: "bg-[#dbeafe] text-[#1d4ed8]" },
-  crop: { label: "Transform", icon: "TR", className: "bg-[#ede9fe] text-[#6d28d9]" },
-  gemini: { label: "AI", icon: "AI", className: "bg-[#ede9fe] text-[#6d28d9]" },
-  response: { label: "Output", icon: "OUT", className: "bg-[#dcfce7] text-[#15803d]" },
+const NODE_KIND_META: Record<
+  FlowNodeData["kind"],
+  { label: string; shortLabel: string; accent: string; softBg: string; icon: string }
+> = {
+  request: { label: "Request", shortLabel: "Input", accent: "#2563eb", softBg: "#eff6ff", icon: "IN" },
+  crop: { label: "Transform", shortLabel: "Crop", accent: "#7c3aed", softBg: "#f5f3ff", icon: "CR" },
+  gemini: { label: "LLM", shortLabel: "Gemini", accent: "#6366f1", softBg: "#eef2ff", icon: "AI" },
+  response: { label: "Response", shortLabel: "Output", accent: "#059669", softBg: "#ecfdf5", icon: "OUT" },
 };
 
 function statusClass(status: RunStatus = "idle") {
-  if (status === "running") return "node-running";
-  if (status === "success") return "node-success";
-  if (status === "error") return "node-error";
-  return "node-idle";
+  if (status === "running") return "workflow-node--running";
+  if (status === "success") return "workflow-node--success";
+  if (status === "error") return "workflow-node--error";
+  return "";
 }
 
 function StatusBadge({ status = "idle" }: { status?: RunStatus }) {
   if (status === "running") {
     return (
-      <div className="flex items-center gap-1 rounded-full bg-[#eef4ff] px-2 py-0.5 text-[11px] font-medium text-[#1d4ed8]">
+      <div className="workflow-node-status workflow-node-status--running">
         <span className="node-spinner" aria-hidden />
         Running
       </div>
@@ -30,14 +33,14 @@ function StatusBadge({ status = "idle" }: { status?: RunStatus }) {
   }
 
   if (status === "success") {
-    return <div className="rounded-full bg-[#ecf8ef] px-2 py-0.5 text-[11px] font-medium text-[#257942]">Done</div>;
+    return <div className="workflow-node-status workflow-node-status--success">Done</div>;
   }
 
   if (status === "error") {
-    return <div className="rounded-full bg-[#fdecec] px-2 py-0.5 text-[11px] font-medium text-[#a83232]">Error</div>;
+    return <div className="workflow-node-status workflow-node-status--error">Error</div>;
   }
 
-  return <div className="rounded-full bg-[#f3f6fb] px-2 py-0.5 text-[11px] font-medium text-[#6b7280]">Idle</div>;
+  return null;
 }
 
 function truncateOutput(value: string, max = 120) {
@@ -47,7 +50,7 @@ function truncateOutput(value: string, max = 120) {
 }
 
 function ExecutionOutputSection({ data }: { data: FlowNodeData }) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const status = data.status ?? "idle";
   const hasRunOutput = status !== "idle";
   const preview =
@@ -56,34 +59,29 @@ function ExecutionOutputSection({ data }: { data: FlowNodeData }) {
       : data.runOutput ?? data.output ?? "No output captured.";
 
   return (
-    <footer className="workflow-card-footer">
+    <footer className="workflow-node-footer">
       <button
         type="button"
-        className="nodrag nopan nowheel flex w-full items-center justify-between text-left text-[12px] font-medium text-[#374151]"
+        className="nodrag nopan nowheel workflow-node-footer-toggle"
         onClick={() => setExpanded((value) => !value)}
       >
-        <span>Execution output</span>
-        <span className="text-[11px] text-[#6b7280]">{expanded ? "Hide" : "Show"}</span>
+        <span>Output</span>
+        <span className="workflow-node-footer-hint">{expanded ? "Hide" : "Show"}</span>
       </button>
 
       <div className={`grid transition-[grid-template-rows] duration-200 ease-out ${expanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}>
         <div className="overflow-hidden">
           {hasRunOutput ? (
-            <div className="nodrag nopan nowheel mt-2 space-y-2 rounded-md border border-[#e1e6ef] bg-[#f9fafb] p-2">
+            <div className="nodrag nopan nowheel workflow-node-output">
               <div className="flex items-center justify-between gap-2">
                 <StatusBadge status={status} />
-                {data.duration ? <span className="text-[11px] text-[#6b7280]">{data.duration}</span> : null}
+                {data.duration ? <span className="text-[11px] text-[#737373]">{data.duration}</span> : null}
               </div>
-              <pre className="max-h-24 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-[#4b5563]">
-                {truncateOutput(preview, 400)}
-              </pre>
+              <pre className="workflow-node-output-text">{truncateOutput(preview, 400)}</pre>
             </div>
           ) : (
-            <div className="mt-2 grid min-h-[74px] place-items-center rounded-md border border-dashed border-[#d9dee8] bg-[#f9fafb] p-3 text-center">
-              <div>
-                <div className="mx-auto grid size-8 place-items-center rounded-full bg-[#eef4ff] text-[11px] font-semibold text-[#2563eb]">OP</div>
-                <p className="mt-2 text-[12px] text-[#6b7280]">Output appears after execution.</p>
-              </div>
+            <div className="workflow-node-output-empty">
+              <p>Output appears after execution.</p>
             </div>
           )}
         </div>
@@ -95,25 +93,41 @@ function ExecutionOutputSection({ data }: { data: FlowNodeData }) {
 function Port({
   id,
   type,
-  position,
   label,
   kind,
+  side,
 }: {
   id: string;
   type: "source" | "target";
-  position: Position;
   label: string;
   kind: PortKind;
+  side: "left" | "right";
 }) {
+  const position = side === "left" ? Position.Left : Position.Right;
+
   return (
-    <div className="relative flex items-center gap-2 rounded-md bg-[#f3f6fb] px-2 py-1 text-[12px] text-[#4b5563]">
-      <Handle
-        id={id}
-        type={type}
-        position={position}
-        className={`workflow-handle ${kind === "image" ? "react-flow__handle-image" : "react-flow__handle-text"}`}
-      />
-      <span className="truncate">{label}</span>
+    <div className={`workflow-port workflow-port--${side}`}>
+      {side === "left" ? (
+        <>
+          <Handle
+            id={id}
+            type={type}
+            position={position}
+            className={`workflow-handle workflow-handle--${kind}`}
+          />
+          <span className="workflow-port-label">{label}</span>
+        </>
+      ) : (
+        <>
+          <span className="workflow-port-label">{label}</span>
+          <Handle
+            id={id}
+            type={type}
+            position={position}
+            className={`workflow-handle workflow-handle--${kind}`}
+          />
+        </>
+      )}
     </div>
   );
 }
@@ -131,15 +145,14 @@ function InlineField({
   multiline?: boolean;
   placeholder?: string;
 }) {
-  const className =
-    "nodrag nopan nowheel w-full rounded-md border border-[#d9dee8] bg-white px-2 py-1.5 text-[14px] text-[#111827] outline-none focus:border-[#2563eb]";
+  const className = "nodrag nopan nowheel workflow-node-field-input";
 
   return (
-    <label className="block space-y-1">
-      <span className="text-[12px] font-medium text-[#4b5563]">{label}</span>
+    <label className="workflow-node-field">
+      <span className="workflow-node-field-label">{label}</span>
       {multiline ? (
         <textarea
-          className={`${className} min-h-[64px] resize-y`}
+          className={`${className} workflow-node-field-textarea`}
           value={value}
           placeholder={placeholder}
           onChange={(event) => onChange(event.target.value)}
@@ -177,7 +190,7 @@ function EditableTitle({ nodeId, title }: { nodeId: string; title: string }) {
   if (editing) {
     return (
       <input
-        className="nodrag nopan nowheel w-full rounded-md border border-[#2563eb] bg-white px-1.5 py-0.5 text-[14px] font-semibold text-[#111827] outline-none"
+        className="nodrag nopan nowheel workflow-node-title-input"
         value={draft}
         autoFocus
         onChange={(event) => setDraft(event.target.value)}
@@ -196,14 +209,11 @@ function EditableTitle({ nodeId, title }: { nodeId: string; title: string }) {
   return (
     <button
       type="button"
-      className="nodrag nopan nowheel group flex w-full min-w-0 items-center gap-1 truncate text-left text-[14px] font-semibold text-[#111827] hover:text-[#1d4ed8]"
+      className="nodrag nopan nowheel workflow-node-title"
       title="Click to rename"
       onClick={() => setEditing(true)}
     >
-      <span className="truncate border-b border-dashed border-transparent group-hover:border-[#93c5fd]">{title}</span>
-      <span aria-hidden className="shrink-0 text-[11px] font-medium text-[#6b7280] opacity-0 transition group-hover:opacity-100">
-        Edit
-      </span>
+      {title}
     </button>
   );
 }
@@ -235,22 +245,28 @@ export default function WorkflowNode({ id, data, selected }: NodeProps<FlowNodeD
   );
 
   return (
-    <div className={`workflow-card ${selected ? "workflow-card-selected" : ""} ${statusClass(status)}`}>
-      <header className="workflow-card-header">
-        <div className="grid size-8 shrink-0 place-items-center rounded-md bg-[#eef4ff] text-[11px] font-semibold text-[#1d4ed8]">{meta.icon}</div>
+    <div
+      className={`workflow-node ${statusClass(status)} ${selected ? "workflow-node--selected" : ""}`}
+      data-kind={data.kind}
+      style={{ ["--node-accent" as string]: meta.accent, ["--node-accent-soft" as string]: meta.softBg }}
+    >
+      <div className="workflow-node-accent" aria-hidden />
+
+      <header className="workflow-node-header">
+        <div className="workflow-node-icon">{meta.icon}</div>
         <div className="min-w-0 flex-1">
           <EditableTitle nodeId={id} title={data.title} />
-          <div className="mt-1 flex items-center gap-2">
-            <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${meta.className}`}>{meta.label}</span>
-            {data.fixed ? <span className="text-[11px] text-[#6b7280]">Locked</span> : null}
+          <div className="workflow-node-meta">
+            <span className="workflow-node-category">{meta.label}</span>
+            {data.fixed ? <span className="workflow-node-locked">Locked</span> : null}
           </div>
         </div>
         <StatusBadge status={status} />
       </header>
 
-      <section className="workflow-card-body">
+      <section className="workflow-node-body">
         {isRequest ? (
-          <div className="space-y-2">
+          <div className="space-y-3">
             <InlineField
               label="text_field"
               value={data.output ?? ""}
@@ -258,20 +274,22 @@ export default function WorkflowNode({ id, data, selected }: NodeProps<FlowNodeD
               placeholder="Enter request text input..."
               onChange={(value) => patch({ output: value })}
             />
-            <Port id="text_field" type="source" position={Position.Right} label="text_field" kind="text" />
-            <Port id="image_field" type="source" position={Position.Right} label="image_field" kind="image" />
+            <div className="workflow-node-port-list">
+              <Port id="text_field" type="source" side="right" label="text_field" kind="text" />
+              <Port id="image_field" type="source" side="right" label="image_field" kind="image" />
+            </div>
           </div>
         ) : null}
 
         {isCrop ? (
-          <div className="space-y-2">
-            <Port id="input-image" type="target" position={Position.Left} label="Input Image" kind="image" />
+          <div className="space-y-3">
+            <Port id="input-image" type="target" side="left" label="Input Image" kind="image" />
             <div className="grid grid-cols-2 gap-2">
               {(["x", "y", "width", "height"] as const).map((field) => (
-                <label key={field} className="space-y-1">
-                  <span className="text-[12px] font-medium text-[#4b5563]">{field}</span>
+                <label key={field} className="workflow-node-field">
+                  <span className="workflow-node-field-label">{field}</span>
                   <input
-                    className="nodrag nopan nowheel w-full rounded-md border border-[#d9dee8] bg-white px-2 py-1.5 text-[14px] outline-none focus:border-[#2563eb]"
+                    className="nodrag nopan nowheel workflow-node-field-input"
                     type="number"
                     min={0}
                     max={100}
@@ -281,17 +299,17 @@ export default function WorkflowNode({ id, data, selected }: NodeProps<FlowNodeD
                 </label>
               ))}
             </div>
-            <div className="rounded-md border border-[#e1e6ef] bg-[#f9fafb] p-2 text-[12px] text-[#6b7280]">
-              Trigger.dev task with mandatory 30+ second wait.
-            </div>
-            <Port id="output-image" type="source" position={Position.Right} label="Output Image" kind="image" />
+            <div className="workflow-node-note">Trigger.dev task with mandatory 30+ second wait.</div>
+            <Port id="output-image" type="source" side="right" label="Output Image" kind="image" />
           </div>
         ) : null}
 
         {isGemini ? (
-          <div className="space-y-2">
-            <Port id="prompt" type="target" position={Position.Left} label="Prompt" kind="text" />
-            <Port id="image" type="target" position={Position.Left} label="Image (Vision)" kind="image" />
+          <div className="space-y-3">
+            <div className="workflow-node-port-list">
+              <Port id="prompt" type="target" side="left" label="Prompt" kind="text" />
+              <Port id="image" type="target" side="left" label="Image" kind="image" />
+            </div>
             <InlineField
               label="System Prompt"
               value={data.systemPrompt ?? ""}
@@ -305,14 +323,14 @@ export default function WorkflowNode({ id, data, selected }: NodeProps<FlowNodeD
               placeholder="e.g. Request-Inputs.text_field"
               onChange={(value) => patch({ prompt: value })}
             />
-            <div className="rounded-md bg-[#f3f6fb] p-2 text-[12px] text-[#6b7280]">Model: Gemini 3.1 Pro</div>
-            <Port id="response" type="source" position={Position.Right} label="Response" kind="text" />
+            <div className="workflow-node-note">Model: Gemini 3.1 Pro</div>
+            <Port id="response" type="source" side="right" label="Response" kind="text" />
           </div>
         ) : null}
 
         {isResponse ? (
-          <div className="space-y-2">
-            <Port id="result" type="target" position={Position.Left} label="result" kind="text" />
+          <div className="space-y-3">
+            <Port id="result" type="target" side="left" label="result" kind="text" />
             <InlineField
               label="Notes"
               value={data.output ?? ""}
@@ -328,4 +346,3 @@ export default function WorkflowNode({ id, data, selected }: NodeProps<FlowNodeD
     </div>
   );
 }
-
