@@ -313,13 +313,16 @@ function cloneSnapshot(nodes: FlowNode[], edges: FlowEdge[]): Snapshot {
 }
 
 function normalizeFlowNodes(nodes: FlowNode[]): FlowNode[] {
-  return nodes.map((node) => ({
-    ...node,
-    id: String(node.id).trim(),
-    type: "workflowNode",
-    position: node.position ? { x: node.position.x, y: node.position.y } : { x: 0, y: 0 },
-    data: { ...node.data },
-  }));
+  return nodes.map((node) => {
+    const { status, duration, runOutput, runError, ...configData } = node.data;
+    return {
+      ...node,
+      id: String(node.id).trim(),
+      type: "workflowNode",
+      position: node.position ? { x: node.position.x, y: node.position.y } : { x: 0, y: 0 },
+      data: configData,
+    };
+  });
 }
 
 function normalizeFlowEdges(edges: FlowEdge[]): FlowEdge[] {
@@ -378,7 +381,10 @@ export default function WorkflowCanvas({
       const response = await fetch(`/api/workflow/${workflowId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nodes, edges }),
+        body: JSON.stringify({
+          nodes: sanitizeNodesForPersistence(nodes),
+          edges,
+        }),
       });
 
       if (!response.ok) {
@@ -421,6 +427,28 @@ export default function WorkflowCanvas({
   }, []);
 
   const selectedNodeIds = useMemo(() => nodes.filter((node) => node.selected).map((node) => node.id), [nodes]);
+  const selectedNode = useMemo(
+    () => (selectedNodeIds.length === 1 ? nodes.find((node) => node.id === selectedNodeIds[0]) ?? null : null),
+    [nodes, selectedNodeIds],
+  );
+
+  const updateNodeData = useCallback((nodeId: string, patch: Partial<FlowNode["data"]>) => {
+    setNodes((current) =>
+      current.map((node) =>
+        node.id === nodeId
+          ? {
+              ...node,
+              data: {
+                ...node.data,
+                ...patch,
+              },
+            }
+          : node,
+      ),
+    );
+  }, []);
+
+  const editorContextValue = useMemo(() => ({ updateNodeData }), [updateNodeData]);
 
   const pushUndo = useCallback(() => {
     setUndoStack((stack) => [...stack.slice(-19), cloneSnapshot(nodes, edges)]);
@@ -544,16 +572,48 @@ export default function WorkflowCanvas({
     });
   }, [edges, nodes]);
 
-  const updateStatus = useCallback((ids: string[], status: RunStatus, duration?: string) => {
+  const updateNodeRunState = useCallback(
+    (
+      ids: string[],
+      status: RunStatus,
+      options?: {
+        duration?: string;
+        runOutput?: string;
+        runError?: string;
+      },
+    ) => {
+      setNodes((current) =>
+        current.map((node) =>
+          ids.includes(node.id)
+            ? {
+                ...node,
+                data: {
+                  ...node.data,
+                  status,
+                  duration: options?.duration ?? node.data.duration,
+                  runOutput: options?.runOutput ?? (status === "idle" ? undefined : node.data.runOutput),
+                  runError: options?.runError ?? (status === "idle" ? undefined : node.data.runError),
+                },
+              }
+            : node,
+        ),
+      );
+    },
+    [],
+  );
+
+  const resetRunState = useCallback((targetIds: string[]) => {
     setNodes((current) =>
       current.map((node) =>
-        ids.includes(node.id)
+        targetIds.includes(node.id)
           ? {
               ...node,
               data: {
                 ...node.data,
-                status,
-                duration: duration ?? node.data.duration,
+                status: "idle" as RunStatus,
+                duration: undefined,
+                runOutput: undefined,
+                runError: undefined,
               },
             }
           : node,
@@ -586,7 +646,8 @@ export default function WorkflowCanvas({
         setToast("Select a node to run.");
         return;
       }
-      const localIds = targetIds.filter((id): id is "request-inputs" | "response" => id === "request-inputs" || id === "response");
+
+      resetRunState(targetIds);
       const executableIds = targetIds.filter((id) => id !== "request-inputs" && id !== "response");
 
       const incomingDependencies = new Map<string, string[]>();
@@ -636,7 +697,11 @@ export default function WorkflowCanvas({
         if (readyNodes.length === 0) {
           if (running.size === 0) {
             if (targetIds.includes("response")) {
-              updateStatus(["response"], "success", "0.1s");
+              const responseNode = nodes.find((node) => node.id === "response");
+              updateNodeRunState(["response"], "success", {
+                duration: "0.1s",
+                runOutput: responseNode ? buildRunOutput(responseNode) : undefined,
+              });
             }
             const nextRunNumber = runCounter + 1;
             const runId = String(nextRunNumber);
@@ -657,12 +722,14 @@ export default function WorkflowCanvas({
               duration: executableIds.some((id) => nodes.find((item) => item.id === id)?.data.kind === "crop") ? "31.8s" : "4.5s",
               nodes: targetIds.map((id) => {
                 const node = nodes.find((item) => item.id === id);
+                const duration =
+                  node?.data.kind === "crop" ? "31.8s" : node?.data.kind === "gemini" ? "4.2s" : "0.1s";
                 return {
                   id,
                   title: node?.data.title ?? id,
-                  status: "success",
-                  duration: node?.data.kind === "crop" ? "31.8s" : node?.data.kind === "gemini" ? "4.2s" : "0.1s",
-                  output: node?.data.kind === "crop" ? "https://cdn.transloadit.com/..." : node?.data.kind === "gemini" ? "Generated response preview..." : "Values resolved locally",
+                  status: "success" as const,
+                  duration,
+                  output: node ? buildRunOutput(node) : "",
                 };
               }),
             };
@@ -681,7 +748,7 @@ export default function WorkflowCanvas({
           return;
         }
 
-        updateStatus(readyNodes, "running");
+        updateNodeRunState(readyNodes, "running");
         readyNodes.forEach((nodeId) => {
           running.add(nodeId);
           const durationMs = runDurationMs(nodeId);
@@ -689,23 +756,34 @@ export default function WorkflowCanvas({
             setTimeout(() => {
               running.delete(nodeId);
               completed.add(nodeId);
-              updateStatus([nodeId], "success", runDurationLabel(nodeId));
+              const node = nodes.find((item) => item.id === nodeId);
+              updateNodeRunState([nodeId], "success", {
+                duration: runDurationLabel(nodeId),
+                runOutput: node ? buildRunOutput(node) : undefined,
+              });
               scheduleNext();
             }, durationMs),
           );
         });
       };
 
-      updateStatus(targetIds, "queued");
       setToast("Run started. Independent siblings execute concurrently.");
       timerRef.current.push(
         setTimeout(() => {
-          updateStatus(localIds, "success", "0.1s");
+          targetIds
+            .filter((id) => id === "request-inputs" || id === "response")
+            .forEach((id) => {
+              const node = nodes.find((item) => item.id === id);
+              updateNodeRunState([id], "success", {
+                duration: "0.1s",
+                runOutput: node ? buildRunOutput(node) : undefined,
+              });
+            });
           scheduleNext();
         }, 250),
       );
     },
-    [edges, nodes, runCounter, selectedNodeIds, updateStatus],
+    [edges, nodes, persistRun, resetRunState, runCounter, selectedNodeIds, updateNodeRunState],
   );
 
   const exportJson = useCallback(() => {
@@ -734,6 +812,7 @@ export default function WorkflowCanvas({
   }, [pushUndo]);
 
   return (
+    <WorkflowEditorContext.Provider value={editorContextValue}>
     <main className="h-screen overflow-hidden bg-[#f7f7f5] text-[#1f1f1f]">
       <div className="grid h-full grid-cols-[260px_1fr_330px]">
         <aside className="border-r border-[#e0ded8] bg-white p-4">
@@ -871,13 +950,15 @@ export default function WorkflowCanvas({
           </div>
         </section>
 
-        <aside className="border-l border-[#e0ded8] bg-white p-4">
+        <aside className="flex flex-col border-l border-[#e0ded8] bg-white p-4">
+          <NodeConfigPanel node={selectedNode} onUpdate={updateNodeData} />
+
           <div className="mb-4">
             <h2 className="text-sm font-semibold">Workflow History</h2>
             <p className="text-xs text-[#77756f]">Runs include scope, duration, status, and node-level details.</p>
           </div>
 
-          <div className="space-y-3 overflow-y-auto pr-1">
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
             {historyRuns.length === 0 ? (
               <div className="rounded-md border border-dashed border-[#d9d8d2] bg-[#fbfbf9] p-4 text-sm text-[#77756f]">
                 Run the workflow to create the first history entry.
@@ -914,6 +995,7 @@ export default function WorkflowCanvas({
         </aside>
       </div>
     </main>
+    </WorkflowEditorContext.Provider>
   );
 }
 

@@ -34,6 +34,7 @@ body {
 .workflow-card {
   width: 230px;
   border: 1px solid #e4e1da;
+  border-left-width: 3px;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.96);
   padding: 12px;
@@ -43,26 +44,45 @@ body {
 
 .workflow-card-selected {
   border-color: #8f87ff;
+  border-left-color: #8f87ff;
   box-shadow: 0 0 0 2px rgba(143, 135, 255, 0.18), 0 12px 30px rgba(31, 31, 31, 0.12);
+}
+
+.workflow-card.node-idle {
+  border-left-color: #dedbd4;
 }
 
 .workflow-card.node-running {
   border-color: #8f87ff;
+  border-left-color: #5947ca;
   box-shadow: 0 0 0 1px rgba(143, 135, 255, 0.2), 0 0 22px rgba(107, 92, 255, 0.42), 0 12px 30px rgba(31, 31, 31, 0.1);
   animation: nextflow-pulse 1.15s ease-in-out infinite;
 }
 
 .workflow-card.node-success {
   border-color: #9ed8b3;
+  border-left-color: #257942;
 }
 
-.workflow-card.node-queued {
-  border-color: #dedbd4;
-  opacity: 0.82;
-}
-
-.workflow-card.node-failed {
+.workflow-card.node-error {
   border-color: #e6a1a1;
+  border-left-color: #a83232;
+}
+
+.node-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 2px solid rgba(89, 71, 202, 0.25);
+  border-top-color: #5947ca;
+  border-radius: 9999px;
+  animation: nextflow-spin 0.75s linear infinite;
+}
+
+@keyframes nextflow-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .react-flow__handle-text,
