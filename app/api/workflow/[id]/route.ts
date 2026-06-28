@@ -56,10 +56,15 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
   }
 
+  const trimmedName = typeof body.name === "string" ? body.name.trim().slice(0, 80) : "";
+
   try {
     const result = await prisma.workflow.updateMany({
       where: { id: workflowId, userId },
-      data: { flowData: { nodes: body.nodes, edges: body.edges } },
+      data: {
+        flowData: { nodes: body.nodes, edges: body.edges },
+        ...(trimmedName ? { name: trimmedName } : {}),
+      },
     });
 
     if (result.count === 0) {

@@ -148,3 +148,15 @@ button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }
+
+.react-flow__handle.workflow-handle.connectingto {
+  border-color: #fff;
+  box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.2);
+  background: #dc2626;
+}
+
+.react-flow__handle.workflow-handle.valid {
+  border-color: #fff;
+  box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.22);
+  background: #16a34a;
+}

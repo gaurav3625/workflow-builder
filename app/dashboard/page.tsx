@@ -1,7 +1,8 @@
 ﻿import { UserButton } from "@clerk/nextjs";
 import { auth } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/prisma";
-import { createWorkflow, deleteWorkflow, renameWorkflow } from "@/lib/actions/workflow";
+import { createWorkflow, deleteWorkflow } from "@/lib/actions/workflow";
+import WorkflowRenameForm from "@/components/dashboard/WorkflowRenameForm";
 import { databaseUnavailableMessage, isDatabaseConnectionError } from "@/lib/prisma-errors";
 import Link from "next/link";
 
@@ -95,8 +96,9 @@ export default async function DashboardPage() {
                 </div>
               </div>
             ) : (
-              <div className="overflow-hidden rounded-md border border-[#e2e2de] bg-white">
-                <div className="grid grid-cols-[1fr_130px_150px_320px] gap-4 border-b border-[#ededeb] px-4 py-3 text-xs font-semibold uppercase tracking-wide text-[#77756f]">
+              <div className="overflow-x-auto rounded-md border border-[#e2e2de] bg-white">
+                <div className="min-w-[760px]">
+                <div className="grid grid-cols-[minmax(260px,1fr)_130px_150px_180px] gap-4 border-b border-[#ededeb] px-4 py-3 text-xs font-semibold uppercase tracking-wide text-[#77756f]">
                   <span>Name</span>
                   <span>Status</span>
                   <span>Last edited</span>
@@ -105,12 +107,14 @@ export default async function DashboardPage() {
                 {workflows.map((workflow) => (
                   <div
                     key={workflow.id}
-                    className="grid grid-cols-[1fr_130px_150px_320px] items-center gap-4 border-b border-[#f0f0ed] px-4 py-3 last:border-b-0"
+                    className="grid grid-cols-[minmax(260px,1fr)_130px_150px_180px] items-center gap-4 border-b border-[#f0f0ed] px-4 py-3 last:border-b-0"
                   >
-                    <Link href={`/dashboard/workflow/${workflow.id}`} className="min-w-0">
-                      <p className="truncate text-sm font-medium">{workflow.name}</p>
-                      <p className="truncate text-xs text-[#77756f]">{workflow.id}</p>
-                    </Link>
+                    <div className="min-w-0 space-y-1">
+                      <WorkflowRenameForm id={workflow.id} name={workflow.name} />
+                      <Link href={`/dashboard/workflow/${workflow.id}`} className="block truncate text-xs text-[#77756f] hover:text-[#111827]">
+                        {workflow.id}
+                      </Link>
+                    </div>
                     <span className="w-fit rounded-full bg-[#ecf8ef] px-2 py-1 text-xs font-medium text-[#257942]">
                       {workflow.status}
                     </span>
@@ -122,18 +126,6 @@ export default async function DashboardPage() {
                       >
                         Open
                       </Link>
-                      <form action={renameWorkflow} className="flex min-w-0 flex-wrap items-center gap-1">
-                        <input type="hidden" name="id" value={workflow.id} />
-                        <input
-                          aria-label={`Rename ${workflow.name}`}
-                          className="w-28 rounded-md border border-[#d9d9d4] px-2 py-1.5 text-xs outline-none focus:border-[#8c8b84]"
-                          name="name"
-                          defaultValue={workflow.name}
-                        />
-                        <button className="rounded-md border border-[#d9d9d4] px-2 py-1.5 text-xs font-medium hover:bg-[#f7f7f5]" type="submit">
-                          Rename
-                        </button>
-                      </form>
                       <form action={deleteWorkflow} className="flex-shrink-0">
                         <input type="hidden" name="id" value={workflow.id} />
                         <button className="rounded-md border border-[#f0c5c5] px-2 py-1.5 text-xs font-medium text-[#a83232] hover:bg-[#fff6f6]" type="submit">
@@ -143,6 +135,7 @@ export default async function DashboardPage() {
                     </div>
                   </div>
                 ))}
+                </div>
               </div>
             )}
           </div>

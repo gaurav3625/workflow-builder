@@ -49,24 +49,20 @@ export async function renameWorkflow(formData: FormData) {
   if (!id || !name) {
     return;
   }
+  try {
+    const workflow = await prisma.workflow.findUnique({ where: { id } });
+    if (!workflow || workflow.userId !== userId) {
+      // nothing to do if the workflow doesn't exist or doesn't belong to the user
+      return;
+    }
 
-  const result = await prisma.workflow.updateMany({
-    where: {
-      id,
-      userId,
-    },
-    data: {
-      name: name.slice(0, 80),
-    },
-  }).catch((error: unknown) => {
+    await prisma.workflow.update({ where: { id }, data: { name: name.slice(0, 80) } });
+    revalidatePath("/dashboard");
+    revalidatePath(`/dashboard/workflow/${id}`);
+  } catch (error: unknown) {
     handleDatabaseActionError("renameWorkflow", error);
-    return null;
-  });
-
-  if (!result) return;
-
-  revalidatePath("/dashboard");
-  revalidatePath(`/dashboard/workflow/${id}`);
+    return;
+  }
 }
 
 export async function deleteWorkflow(formData: FormData) {

@@ -111,7 +111,7 @@ function Port({
         id={id}
         type={type}
         position={position}
-        className={kind === "image" ? "react-flow__handle-image" : "react-flow__handle-text"}
+        className={`workflow-handle ${kind === "image" ? "react-flow__handle-image" : "react-flow__handle-text"}`}
       />
       <span className="truncate">{label}</span>
     </div>
@@ -196,11 +196,14 @@ function EditableTitle({ nodeId, title }: { nodeId: string; title: string }) {
   return (
     <button
       type="button"
-      className="nodrag nopan truncate text-left text-[14px] font-semibold text-[#111827] hover:text-[#1d4ed8]"
+      className="nodrag nopan nowheel group flex w-full min-w-0 items-center gap-1 truncate text-left text-[14px] font-semibold text-[#111827] hover:text-[#1d4ed8]"
       title="Click to rename"
       onClick={() => setEditing(true)}
     >
-      {title}
+      <span className="truncate border-b border-dashed border-transparent group-hover:border-[#93c5fd]">{title}</span>
+      <span aria-hidden className="shrink-0 text-[11px] font-medium text-[#6b7280] opacity-0 transition group-hover:opacity-100">
+        Edit
+      </span>
     </button>
   );
 }
@@ -325,3 +328,4 @@ export default function WorkflowNode({ id, data, selected }: NodeProps<FlowNodeD
     </div>
   );
 }
+

@@ -11,6 +11,7 @@ import ReactFlow, {
   applyNodeChanges,
   type Connection,
   type EdgeChange,
+  MarkerType,
   type NodeChange,
   type ReactFlowInstance,
 } from "reactflow";
@@ -36,6 +37,34 @@ import {
 const REQUIRED_NODE_IDS = new Set(["request-inputs", "response"]);
 
 const EMPTY_SNAPSHOT: Snapshot = { nodes: [], edges: [] };
+
+const STARTER_NODES: FlowNode[] = [
+  {
+    id: "request-inputs",
+    type: "workflowNode",
+    position: { x: 80, y: 220 },
+    deletable: false,
+    data: {
+      title: "Request-Inputs",
+      kind: "request",
+      fixed: true,
+      fields: ["text_field", "image_field"],
+      output: "",
+    },
+  },
+  {
+    id: "response",
+    type: "workflowNode",
+    position: { x: 720, y: 220 },
+    deletable: false,
+    data: {
+      title: "Response",
+      kind: "response",
+      fixed: true,
+      fields: ["result"],
+    },
+  },
+];
 
 const SAMPLE_NODES: FlowNode[] = [
   {
@@ -149,11 +178,13 @@ const NODE_KIND_META: Record<NodeKind, { label: string; accent: string }> = {
 function edge(source: string, sourceHandle: string, target: string, targetHandle: string, kind: PortKind): FlowEdge {
   return {
     id: `${source}-${sourceHandle}-${target}-${targetHandle}`,
+    type: "smoothstep",
     source,
     sourceHandle,
     target,
     targetHandle,
     animated: true,
+    markerEnd: { type: MarkerType.ArrowClosed },
     data: { kind },
     style: { stroke: kind === "image" ? "#7c8cff" : "#ff9b38", strokeWidth: 2 },
   };
@@ -241,6 +272,42 @@ function wouldCreateCycle(edges: FlowEdge[], connection: Connection) {
   return visit(connection.target);
 }
 
+function hasDuplicateEdge(edges: FlowEdge[], connection: Connection) {
+  if (!connection.source || !connection.target) return false;
+  const sourceHandle = normalizeHandleId(connection.sourceHandle ? String(connection.sourceHandle) : null);
+  const targetHandle = normalizeHandleId(connection.targetHandle ? String(connection.targetHandle) : null);
+  return edges.some(
+    (edge) =>
+      edge.source === connection.source &&
+      edge.target === connection.target &&
+      normalizeHandleId(edge.sourceHandle ? String(edge.sourceHandle) : null) === sourceHandle &&
+      normalizeHandleId(edge.targetHandle ? String(edge.targetHandle) : null) === targetHandle,
+  );
+}
+
+function validateConnection(connection: Connection, flowNodes: FlowNode[], flowEdges: FlowEdge[]): { valid: boolean; reason?: string } {
+  if (!connection.source || !connection.target) {
+    return { valid: false, reason: "Connection is incomplete." };
+  }
+
+  if (connection.source === connection.target) {
+    return { valid: false, reason: "Cannot connect a node to itself." };
+  }
+
+  if (hasDuplicateEdge(flowEdges, connection)) {
+    return { valid: false, reason: "These nodes are already connected." };
+  }
+
+  if (!isCompatible(connection, flowNodes)) {
+    return { valid: false, reason: "Handle types do not match." };
+  }
+
+  if (wouldCreateCycle(flowEdges, connection)) {
+    return { valid: false, reason: "Connection would create a cycle." };
+  }
+
+  return { valid: true };
+}
 function makeAddedNode(kind: NodeKind, count: number, position?: { x: number; y: number }): FlowNode {
   if (kind === "request") {
     return {
@@ -333,16 +400,48 @@ function buildNodeResult(node: FlowNode): string {
     type: node.data.kind,
   });
 }
+
+function buildIncomingDependencies(targetIds: string[], flowEdges: FlowEdge[]): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  for (const id of targetIds) {
+    map.set(id, []);
+  }
+
+  for (const item of flowEdges) {
+    if (!targetIds.includes(item.target)) continue;
+    if (!targetIds.includes(item.source) && item.source !== "request-inputs") continue;
+    map.set(item.target, [...(map.get(item.target) ?? []), item.source]);
+  }
+
+  return map;
+}
+
+function compareNodeRunOrder(a: string, b: string, flowNodes: FlowNode[]): number {
+  const aNode = flowNodes.find((node) => node.id === a);
+  const bNode = flowNodes.find((node) => node.id === b);
+  const xDiff = (aNode?.position.x ?? 0) - (bNode?.position.x ?? 0);
+  if (xDiff !== 0) return xDiff;
+  return a.localeCompare(b);
+}
+
 function normalizeFlowEdges(edges: FlowEdge[]): FlowEdge[] {
-  return edges.map((edge) => {
+  return edges.map((item) => {
+    const sourceHandle = normalizeHandleId(item.sourceHandle ? String(item.sourceHandle) : null);
+    const targetHandle = normalizeHandleId(item.targetHandle ? String(item.targetHandle) : null);
+    const kind = item.data?.kind ?? "text";
+
     return {
-      ...edge,
-      id: String(edge.id ?? "").trim(),
-      source: String(edge.source ?? "").trim(),
-      target: String(edge.target ?? "").trim(),
-      sourceHandle: normalizeHandleId(edge.sourceHandle ? String(edge.sourceHandle) : null),
-      targetHandle: normalizeHandleId(edge.targetHandle ? String(edge.targetHandle) : null),
-      data: edge.data ? { ...edge.data } : undefined,
+      ...item,
+      id: String(item.id ?? "").trim() || `${item.source}-${sourceHandle}-${item.target}-${targetHandle}`,
+      type: item.type ?? "smoothstep",
+      source: String(item.source ?? "").trim(),
+      target: String(item.target ?? "").trim(),
+      sourceHandle,
+      targetHandle,
+      animated: item.animated ?? true,
+      markerEnd: item.markerEnd ?? { type: MarkerType.ArrowClosed },
+      data: { kind, ...(item.data ?? {}) },
+      style: item.style ?? { stroke: kind === "image" ? "#7c8cff" : "#ff9b38", strokeWidth: 2 },
     };
   });
 }
@@ -364,7 +463,10 @@ export default function WorkflowCanvas({
       };
     }
 
-    return EMPTY_SNAPSHOT;
+    return {
+      nodes: normalizeFlowNodes(STARTER_NODES),
+      edges: [],
+    };
   }, [initialFlow]);
 
   const [nodes, setNodes] = useState<FlowNode[]>(initialSnapshot.nodes);
@@ -372,10 +474,13 @@ export default function WorkflowCanvas({
   const [paletteQuery, setPaletteQuery] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [draftWorkflowName, setDraftWorkflowName] = useState(workflowName);
+  const draftWorkflowNameRef = useRef(workflowName);
+  const savedWorkflowNameRef = useRef(workflowName);
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance | null>(null);
   const [expandedRun, setExpandedRun] = useState<string | null>(null);
   const [historyRuns, setHistoryRuns] = useState<HistoryRun[]>([]);
   const [toast, setToast] = useState("Ready");
+  const [connectionToast, setConnectionToast] = useState<string | null>(null);
   const [undoStack, setUndoStack] = useState<Snapshot[]>([]);
   const [redoStack, setRedoStack] = useState<Snapshot[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -391,22 +496,28 @@ export default function WorkflowCanvas({
     latestFlowRef.current = { nodes, edges };
   }, [edges, nodes]);
 
+  useEffect(() => {
+    draftWorkflowNameRef.current = draftWorkflowName;
+  }, [draftWorkflowName]);
+
   const markCanvasChanged = useCallback(() => {
     setSaveStatus("saving");
     setSaveRequest((value) => value + 1);
   }, []);
 
   const saveWorkflow = useCallback(
-    async (showToast = true) => {
+    async (showToast = true, nameOverride?: string) => {
       setSaveStatus("saving");
       try {
         const { nodes: latestNodes, edges: latestEdges } = latestFlowRef.current;
+        const nextName = (nameOverride ?? draftWorkflowNameRef.current).trim() || workflowName;
         const response = await fetch(`/api/workflow/${workflowId}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             nodes: sanitizeNodesForPersistence(latestNodes),
             edges: latestEdges,
+            name: nextName,
           }),
         });
 
@@ -414,8 +525,12 @@ export default function WorkflowCanvas({
           throw new Error("Save failed");
         }
 
+        savedWorkflowNameRef.current = nextName;
+        setDraftWorkflowName(nextName);
         setSaveStatus("saved");
-        if (showToast) setToast("Workflow saved.");
+        if (showToast) {
+          setToast(nameOverride ? "Workflow renamed." : "Workflow saved.");
+        }
         return true;
       } catch {
         setSaveStatus("error");
@@ -423,8 +538,16 @@ export default function WorkflowCanvas({
         return false;
       }
     },
-    [workflowId],
+    [workflowId, workflowName],
   );
+
+  const commitWorkflowName = useCallback(() => {
+    const trimmed = draftWorkflowNameRef.current.trim() || workflowName;
+    setDraftWorkflowName(trimmed);
+    if (trimmed !== savedWorkflowNameRef.current) {
+      void saveWorkflow(true, trimmed);
+    }
+  }, [saveWorkflow, workflowName]);
 
   const fetchHistoryRuns = useCallback(async () => {
     try {
@@ -463,6 +586,11 @@ export default function WorkflowCanvas({
     [fetchHistoryRuns, workflowId],
   );
 
+  useEffect(() => {
+    if (!connectionToast) return;
+    const timer = setTimeout(() => setConnectionToast(null), 2600);
+    return () => clearTimeout(timer);
+  }, [connectionToast]);
   useEffect(() => {
     if (loggedRef.current) return;
     loggedRef.current = true;
@@ -546,21 +674,28 @@ export default function WorkflowCanvas({
     setEdges((current) => applyEdgeChanges(changes, current) as FlowEdge[]);
   }, [markCanvasChanged]);
 
+  const normalizeConnection = useCallback((connection: Connection): Connection => {
+    return {
+      ...connection,
+      sourceHandle: normalizeHandleId(connection.sourceHandle ? String(connection.sourceHandle) : undefined),
+      targetHandle: normalizeHandleId(connection.targetHandle ? String(connection.targetHandle) : undefined),
+    };
+  }, []);
+
+  const isValidConnection = useCallback(
+    (connection: Connection) => validateConnection(normalizeConnection(connection), nodes, edges).valid,
+    [edges, nodes, normalizeConnection],
+  );
+
   const onConnect = useCallback(
     (connection: Connection) => {
-      const normalizedConnection = {
-        ...connection,
-        sourceHandle: normalizeHandleId(connection.sourceHandle ? String(connection.sourceHandle) : undefined),
-        targetHandle: normalizeHandleId(connection.targetHandle ? String(connection.targetHandle) : undefined),
-      };
+      const normalizedConnection = normalizeConnection(connection);
+      const validation = validateConnection(normalizedConnection, nodes, edges);
 
-      if (!isCompatible(normalizedConnection, nodes)) {
-        setToast("Invalid drag rejected: handle types do not match.");
-        return;
-      }
-
-      if (wouldCreateCycle(edges, normalizedConnection)) {
-        setToast("Invalid drag rejected: workflow must remain a DAG.");
+      if (!validation.valid) {
+        const message = validation.reason ?? "Connection rejected.";
+        setToast(message);
+        setConnectionToast(message);
         return;
       }
 
@@ -572,7 +707,9 @@ export default function WorkflowCanvas({
         addEdge(
           {
             ...normalizedConnection,
+            type: "smoothstep",
             animated: true,
+            markerEnd: { type: MarkerType.ArrowClosed },
             data: { kind },
             style: { stroke: kind === "image" ? "#7c8cff" : "#ff9b38", strokeWidth: 2 },
           },
@@ -581,9 +718,8 @@ export default function WorkflowCanvas({
       );
       setToast("Connection added.");
     },
-    [edges, markCanvasChanged, nodes, pushUndo],
+    [edges, markCanvasChanged, nodes, normalizeConnection, pushUndo],
   );
-
   const addNode = useCallback(
     (kind: NodeKind, position?: { x: number; y: number }) => {
       if (kind === "request" && nodes.some((node) => node.id === "request-inputs")) {
@@ -654,8 +790,11 @@ export default function WorkflowCanvas({
     markCanvasChanged();
     setNodes(normalizeFlowNodes(SAMPLE_NODES));
     setEdges(normalizeFlowEdges(SAMPLE_EDGES));
-    setToast("Sample workflow loaded.");
-  }, [markCanvasChanged, pushUndo]);
+    setToast("Sample workflow loaded with connected edges.");
+    window.setTimeout(() => {
+      flowInstance?.fitView({ padding: 0.18, duration: 300 });
+    }, 60);
+  }, [flowInstance, markCanvasChanged, pushUndo]);
 
   const deleteSelected = useCallback(() => {
     const removable = new Set(selectedNodeIds.filter((id) => !REQUIRED_NODE_IDS.has(id)));
@@ -773,7 +912,7 @@ export default function WorkflowCanvas({
 
       const runStartedAt = new Date();
       resetRunState(targetIds);
-      const executableIds = targetIds.filter((id) => id !== "request-inputs" && id !== "response");
+      const runnableIds = targetIds.filter((id) => id !== "request-inputs");
       const nodeResults = new Map<string, PersistedNodeRun>();
       const recordNodeResult = (nodeId: string, startedAt: Date, completedAt: Date) => {
         const node = nodes.find((item) => item.id === nodeId);
@@ -791,23 +930,14 @@ export default function WorkflowCanvas({
         });
       };
 
-      const incomingDependencies = new Map<string, string[]>();
-      for (const edge of edges) {
-        if (!targetIds.includes(edge.target)) continue;
-        if (!targetIds.includes(edge.source) && edge.source !== "request-inputs" && edge.source !== "response") {
-          continue;
-        }
-
-        incomingDependencies.set(edge.target, [...(incomingDependencies.get(edge.target) ?? []), edge.source]);
-      }
+      const incomingDependencies = buildIncomingDependencies(targetIds, edges);
 
       const isReady = (nodeId: string, completed: Set<string>) => {
         const deps = incomingDependencies.get(nodeId) ?? [];
-        if (deps.length === 0) return true;
-        return deps.every((sourceId) => {
-          if (sourceId === "request-inputs" || sourceId === "response") return true;
-          return completed.has(sourceId);
-        });
+        if (deps.length === 0) {
+          return completed.has("request-inputs") || !targetIds.includes("request-inputs");
+        }
+        return deps.every((sourceId) => completed.has(sourceId));
       };
 
       const simulatedRunDelayMs = (nodeId: string) => {
@@ -819,18 +949,8 @@ export default function WorkflowCanvas({
 
       const completed = new Set<string>();
       const running = new Set<string>();
-      const completeRun = () => {
-        if (targetIds.includes("response") && !nodeResults.has("response")) {
-          const responseStartedAt = new Date();
-          const responseCompletedAt = new Date();
-          const responseNode = nodes.find((node) => node.id === "response");
-          recordNodeResult("response", responseStartedAt, responseCompletedAt);
-          updateNodeRunState(["response"], "success", {
-            duration: formatDurationMs(responseCompletedAt.getTime() - responseStartedAt.getTime()),
-            runOutput: responseNode ? buildRunOutput(responseNode) : undefined,
-          });
-        }
 
+      const completeRun = () => {
         const runCompletedAt = new Date();
         const runScope: PersistedRun["scope"] = scope === "full" ? "full" : scope === "selected" ? "partial" : "single";
         const persistedRun: PersistedRun = {
@@ -853,52 +973,61 @@ export default function WorkflowCanvas({
         });
       };
 
-      const scheduleNext = () => {
-        const readyNodes = executableIds.filter(
-          (id) => !completed.has(id) && !running.has(id) && isReady(id, completed),
+      const runSingleNode = (nodeId: string) => {
+        running.add(nodeId);
+        updateNodeRunState([nodeId], "running");
+        const nodeStartedAt = new Date();
+        timerRef.current.push(
+          setTimeout(() => {
+            running.delete(nodeId);
+            completed.add(nodeId);
+            const nodeCompletedAt = new Date();
+            const node = nodes.find((item) => item.id === nodeId);
+            recordNodeResult(nodeId, nodeStartedAt, nodeCompletedAt);
+            updateNodeRunState([nodeId], "success", {
+              duration: formatDurationMs(nodeCompletedAt.getTime() - nodeStartedAt.getTime()),
+              runOutput: node ? buildRunOutput(node) : undefined,
+            });
+            scheduleNext();
+          }, simulatedRunDelayMs(nodeId)),
         );
+      };
+
+      const scheduleNext = () => {
+        const readyNodes = runnableIds
+          .filter((id) => !completed.has(id) && !running.has(id) && isReady(id, completed))
+          .sort((a, b) => compareNodeRunOrder(a, b, nodes));
 
         if (readyNodes.length === 0) {
           if (running.size === 0) completeRun();
           return;
         }
 
-        updateNodeRunState(readyNodes, "running");
-        readyNodes.forEach((nodeId) => {
-          running.add(nodeId);
-          const nodeStartedAt = new Date();
-          timerRef.current.push(
-            setTimeout(() => {
-              running.delete(nodeId);
-              completed.add(nodeId);
-              const nodeCompletedAt = new Date();
-              const node = nodes.find((item) => item.id === nodeId);
-              recordNodeResult(nodeId, nodeStartedAt, nodeCompletedAt);
-              updateNodeRunState([nodeId], "success", {
-                duration: formatDurationMs(nodeCompletedAt.getTime() - nodeStartedAt.getTime()),
-                runOutput: node ? buildRunOutput(node) : undefined,
-              });
-              scheduleNext();
-            }, simulatedRunDelayMs(nodeId)),
-          );
-        });
+        runSingleNode(readyNodes[0]);
       };
 
-      setToast("Run started. Independent siblings execute concurrently.");
+      setToast("Run started. Nodes execute one at a time in dependency order.");
       timerRef.current.push(
         setTimeout(() => {
-          targetIds
-            .filter((id) => id === "request-inputs" || id === "response")
-            .forEach((id) => {
-              const nodeStartedAt = new Date();
-              const nodeCompletedAt = new Date();
-              const node = nodes.find((item) => item.id === id);
-              recordNodeResult(id, nodeStartedAt, nodeCompletedAt);
-              updateNodeRunState([id], "success", {
-                duration: formatDurationMs(nodeCompletedAt.getTime() - nodeStartedAt.getTime()),
-                runOutput: node ? buildRunOutput(node) : undefined,
-              });
-            });
+          if (targetIds.includes("request-inputs")) {
+            updateNodeRunState(["request-inputs"], "running");
+            timerRef.current.push(
+              setTimeout(() => {
+                const nodeStartedAt = new Date();
+                const nodeCompletedAt = new Date();
+                const node = nodes.find((item) => item.id === "request-inputs");
+                completed.add("request-inputs");
+                recordNodeResult("request-inputs", nodeStartedAt, nodeCompletedAt);
+                updateNodeRunState(["request-inputs"], "success", {
+                  duration: formatDurationMs(nodeCompletedAt.getTime() - nodeStartedAt.getTime()),
+                  runOutput: node ? buildRunOutput(node) : undefined,
+                });
+                scheduleNext();
+              }, 150),
+            );
+            return;
+          }
+
           scheduleNext();
         }, 250),
       );
@@ -946,7 +1075,7 @@ export default function WorkflowCanvas({
                 <div className="grid size-8 place-items-center rounded-md bg-[#1d4ed8] text-[11px] font-semibold text-white">WF</div>
                 <div className="min-w-0">
                   <h1 className="truncate text-[14px] font-semibold text-[#111827]">Node Palette</h1>
-                  <p className="text-[11px] text-[#6b7280]">Drag nodes onto the canvas</p>
+                  <p className="text-[11px] text-[#6b7280]">Drag nodes onto the canvas, then connect handles</p>
                 </div>
               </div>
               <input
@@ -1017,11 +1146,21 @@ export default function WorkflowCanvas({
                   Dashboard
                 </a>
                 <input
-                  className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-2 py-1 text-[14px] font-semibold text-[#111827] outline-none hover:border-[#d9dee8] focus:border-[#2563eb] focus:bg-white"
+                  className="min-w-0 flex-1 rounded-md border border-[#d9dee8] bg-white px-2 py-1 text-[14px] font-semibold text-[#111827] outline-none focus:border-[#2563eb]"
                   value={draftWorkflowName}
                   onChange={(event) => setDraftWorkflowName(event.target.value)}
-                  onBlur={() => setDraftWorkflowName((value) => value.trim() || workflowName)}
+                  onBlur={commitWorkflowName}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.currentTarget.blur();
+                    }
+                    if (event.key === "Escape") {
+                      setDraftWorkflowName(savedWorkflowNameRef.current);
+                      event.currentTarget.blur();
+                    }
+                  }}
                   aria-label="Workflow name"
+                  title="Edit workflow name (Enter to save, Escape to cancel)"
                 />
                 <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium ${saveStatusTone}`}>{saveStatusText}</span>
                 <button className="rounded-md border border-[#16a34a] bg-[#16a34a] px-4 py-2 text-[14px] font-semibold text-white transition hover:bg-[#15803d]" onClick={() => runWorkflow("full")}>
@@ -1063,12 +1202,16 @@ export default function WorkflowCanvas({
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
+              isValidConnection={isValidConnection}
               onInit={setFlowInstance}
               fitView={nodes.length > 0}
               deleteKeyCode={["Backspace", "Delete"]}
               proOptions={{ hideAttribution: true }}
               nodesDraggable
               nodesConnectable
+              defaultEdgeOptions={{ type: "smoothstep", animated: true, markerEnd: { type: MarkerType.ArrowClosed }, style: { strokeWidth: 2 } }}
+              connectionLineStyle={{ stroke: "#2563eb", strokeWidth: 2 }}
+              connectionLineType="smoothstep"
             >
               <Background color="#cfd7e6" gap={18} size={1.2} variant={BackgroundVariant.Dots} />
               <Controls position="bottom-left" showInteractive={false} />
@@ -1082,6 +1225,11 @@ export default function WorkflowCanvas({
               />
             </ReactFlow>
 
+            {connectionToast ? (
+              <div className="pointer-events-none absolute left-1/2 top-20 z-30 -translate-x-1/2 rounded-md border border-[#fecaca] bg-white px-4 py-2 text-[14px] font-medium text-[#991b1b] shadow-lg">
+                {connectionToast}
+              </div>
+            ) : null}
             {nodes.length === 0 ? (
               <div className="pointer-events-none absolute inset-0 z-[5] grid place-items-center pt-16">
                 <div className="rounded-md border border-dashed border-[#cfd7e6] bg-white/92 px-8 py-6 text-center shadow-sm">
@@ -1185,5 +1333,9 @@ export default function WorkflowCanvas({
     </WorkflowEditorContext.Provider>
   );
 }
+
+
+
+
 
 
