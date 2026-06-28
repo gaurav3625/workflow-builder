@@ -9,95 +9,33 @@ import ReactFlow, {
   addEdge,
   applyEdgeChanges,
   applyNodeChanges,
-  Handle,
-  Position,
   type Connection,
-  type Edge,
   type EdgeChange,
-  type Node,
   type NodeChange,
-  type NodeProps,
 } from "reactflow";
 
 import "reactflow/dist/style.css";
 
-type PortKind = "text" | "image" | "any" | "result";
-type NodeKind = "request" | "crop" | "gemini" | "response";
-type RunStatus = "idle" | "queued" | "running" | "success" | "failed";
-
-type FlowNodeData = {
-  title: string;
-  kind: NodeKind;
-  fixed?: boolean;
-  status?: RunStatus;
-  duration?: string;
-  fields?: string[];
-  systemPrompt?: string;
-  prompt?: string;
-  output?: string;
-  crop?: {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  };
-};
-
-type FlowNode = Node<FlowNodeData>;
-type FlowEdge = Edge<{ kind: PortKind }>;
-
-type Snapshot = {
-  nodes: FlowNode[];
-  edges: FlowEdge[];
-};
-
-type HistoryNode = {
-  id: string;
-  title: string;
-  status: "pending" | "running" | "success" | "failed" | "partial";
-  duration: string;
-  output: string;
-};
-
-type HistoryRunScopeLabel = "Full Workflow" | "Multi-select" | "Single Node";
-
-type HistoryRun = {
-  id: string;
-  scope: HistoryRunScopeLabel;
-  status: "pending" | "running" | "success" | "failed" | "partial";
-  startedAt: string;
-  duration: string;
-  nodes: HistoryNode[];
-};
-
-type PersistedRun = {
-  scope: "full" | "partial" | "single";
-  status: "pending" | "running" | "success" | "failed" | "partial";
-  nodes: HistoryNode[];
-};
+import NodeConfigPanel from "@/components/workflow/NodeConfigPanel";
+import { WorkflowEditorContext } from "@/components/workflow/context";
+import WorkflowNode from "@/components/workflow/WorkflowNode";
+import {
+  type FlowEdge,
+  type FlowNode,
+  type HistoryRun,
+  type NodeKind,
+  type PersistedRun,
+  type PortKind,
+  type RunStatus,
+  type Snapshot,
+  sanitizeNodesForPersistence,
+} from "@/components/workflow/types";
 
 const REQUIRED_NODE_IDS = new Set(["request-inputs", "response"]);
 
-const PORT_TYPES: Record<string, PortKind> = {
-  "request-inputs:text_field": "text",
-  "request-inputs:image_field": "image",
-  "crop-1:input-image": "image",
-  "crop-1:output-image": "image",
-  "crop-2:input-image": "image",
-  "crop-2:output-image": "image",
-  "gemini-1:prompt": "text",
-  "gemini-1:image": "image",
-  "gemini-1:response": "text",
-  "gemini-2:prompt": "text",
-  "gemini-2:image": "image",
-  "gemini-2:response": "text",
-  "gemini-final:prompt": "text",
-  "gemini-final:image": "image",
-  "gemini-final:response": "text",
-  "response:result": "text",
-};
+const EMPTY_SNAPSHOT: Snapshot = { nodes: [], edges: [] };
 
-const INITIAL_NODES: FlowNode[] = [
+const SAMPLE_NODES: FlowNode[] = [
   {
     id: "request-inputs",
     type: "workflowNode",
@@ -178,7 +116,7 @@ const INITIAL_NODES: FlowNode[] = [
   },
 ];
 
-const INITIAL_EDGES: FlowEdge[] = [
+const SAMPLE_EDGES: FlowEdge[] = [
   edge("request-inputs", "image_field", "crop-1", "input-image", "image"),
   edge("request-inputs", "image_field", "crop-2", "input-image", "image"),
   edge("request-inputs", "text_field", "gemini-1", "prompt", "text"),
@@ -190,8 +128,10 @@ const INITIAL_EDGES: FlowEdge[] = [
 ];
 
 const NODE_PICKER = [
+  { kind: "request" as const, label: "Request-Inputs", category: "Core" },
   { kind: "crop" as const, label: "Crop Image", category: "Image" },
   { kind: "gemini" as const, label: "Gemini 3.1 Pro", category: "Recent" },
+  { kind: "response" as const, label: "Response", category: "Core" },
 ];
 
 function edge(source: string, sourceHandle: string, target: string, targetHandle: string, kind: PortKind): FlowEdge {
@@ -207,108 +147,83 @@ function edge(source: string, sourceHandle: string, target: string, targetHandle
   };
 }
 
-function statusClass(status: RunStatus = "idle") {
-  if (status === "running") return "node-running";
-  if (status === "success") return "node-success";
-  if (status === "queued") return "node-queued";
-  if (status === "failed") return "node-failed";
-  return "";
-}
-
-function Port({ id, type, position, label, kind }: { id: string; type: "source" | "target"; position: Position; label: string; kind: PortKind }) {
-  return (
-    <div className="relative flex items-center gap-2 rounded bg-[#f5f5f2] px-2 py-1 text-[10px] text-[#6d6b65]">
-      <Handle
-        id={id}
-        type={type}
-        position={position}
-        className={kind === "image" ? "react-flow__handle-image" : "react-flow__handle-text"}
-      />
-      <span className="truncate">{label}</span>
-    </div>
-  );
-}
-
-function WorkflowNode({ data, selected }: NodeProps<FlowNodeData>) {
-  const isCrop = data.kind === "crop";
-  const isGemini = data.kind === "gemini";
-  const isRequest = data.kind === "request";
-  const isResponse = data.kind === "response";
-  const crop = data.crop;
-
-  return (
-    <div className={`workflow-card ${selected ? "workflow-card-selected" : ""} ${statusClass(data.status)}`}>
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="truncate text-[12px] font-semibold text-[#232323]">{data.title}</div>
-          <div className="mt-0.5 text-[10px] uppercase tracking-wide text-[#918f88]">
-            {data.fixed ? "locked" : data.kind}
-          </div>
-        </div>
-        <div className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${data.status === "running" ? "bg-[#ece9ff] text-[#5947ca]" : "bg-[#ecf8ef] text-[#257942]"}`}>
-          {data.status === "running" ? "Run" : data.status === "success" ? "Done" : "Idle"}
-        </div>
-      </div>
-
-      {isRequest ? (
-        <div className="space-y-2">
-          <div className="rounded border border-[#e6e4df] bg-white p-2 text-[10px] text-[#55524b]">
-            <div className="font-medium text-[#333]">text_field</div>
-            <div className="mt-1 line-clamp-2">{data.output}</div>
-          </div>
-          <Port id="text_field" type="source" position={Position.Right} label="text_field" kind="text" />
-          <Port id="image_field" type="source" position={Position.Right} label="image_field" kind="image" />
-        </div>
-      ) : null}
-
-      {isCrop ? (
-        <div className="space-y-2">
-          <Port id="input-image" type="target" position={Position.Left} label="Input Image" kind="image" />
-          <div className="grid grid-cols-4 gap-1 text-[10px]">
-            <span className="rounded bg-[#f5f5f2] px-1.5 py-1">X {crop?.x}%</span>
-            <span className="rounded bg-[#f5f5f2] px-1.5 py-1">Y {crop?.y}%</span>
-            <span className="rounded bg-[#f5f5f2] px-1.5 py-1">W {crop?.width}%</span>
-            <span className="rounded bg-[#f5f5f2] px-1.5 py-1">H {crop?.height}%</span>
-          </div>
-          <div className="rounded border border-[#edeae4] bg-white p-2 text-[10px] text-[#77756f]">Trigger.dev task with mandatory 30+ second wait.</div>
-          <Port id="output-image" type="source" position={Position.Right} label="Output Image" kind="image" />
-        </div>
-      ) : null}
-
-      {isGemini ? (
-        <div className="space-y-2">
-          <Port id="prompt" type="target" position={Position.Left} label="Prompt" kind="text" />
-          <Port id="image" type="target" position={Position.Left} label="Image (Vision)" kind="image" />
-          <div className="rounded border border-[#e6e4df] bg-white p-2 text-[10px] text-[#55524b]">
-            <div className="font-medium text-[#333]">System Prompt</div>
-            <div className="mt-1 line-clamp-2">{data.systemPrompt}</div>
-          </div>
-          <div className="rounded bg-[#f5f5f2] p-2 text-[10px] text-[#77756f]">Model: Gemini 3.1 Pro</div>
-          <Port id="response" type="source" position={Position.Right} label="Response" kind="text" />
-        </div>
-      ) : null}
-
-      {isResponse ? (
-        <div className="space-y-2">
-          <Port id="result" type="target" position={Position.Left} label="result" kind="text" />
-          <div className="rounded border border-[#e6e4df] bg-white p-2 text-[10px] text-[#77756f]">Final result captured for display/export.</div>
-        </div>
-      ) : null}
-
-      {data.duration ? <div className="mt-3 text-[10px] text-[#77756f]">Last run: {data.duration}</div> : null}
-    </div>
-  );
-}
-
 const nodeTypes = { workflowNode: WorkflowNode };
 
-function portKey(nodeId?: string | null, handleId?: string | null) {
-  return `${nodeId ?? ""}:${handleId ?? ""}`;
+function buildRunOutput(node: FlowNode): string {
+  switch (node.data.kind) {
+    case "crop":
+      return JSON.stringify(
+        { url: "https://cdn.transloadit.com/cropped-output.jpg", crop: node.data.crop },
+        null,
+        2,
+      );
+    case "gemini":
+      return JSON.stringify(
+        {
+          model: "gemini-3.1-pro",
+          response: "Generated response preview based on connected inputs.",
+          prompt: node.data.prompt ?? "",
+        },
+        null,
+        2,
+      );
+    case "request":
+      return JSON.stringify({ text_field: node.data.output ?? "", image_field: "[binary]" }, null, 2);
+    case "response":
+      return JSON.stringify({ result: "Workflow result captured for display/export." }, null, 2);
+    default:
+      return "{}";
+  }
 }
 
-function isCompatible(connection: Connection) {
-  const sourceKind = PORT_TYPES[portKey(connection.source, connection.sourceHandle)];
-  const targetKind = PORT_TYPES[portKey(connection.target, connection.targetHandle)];
+const HANDLE_NORMALIZATION: Record<string, string> = {
+  inputImage: "input-image",
+  outputImage: "output-image",
+  imageField: "image_field",
+  textField: "text_field",
+  inputimage: "input-image",
+  outputimage: "output-image",
+  imagefield: "image_field",
+  textfield: "text_field",
+};
+
+function normalizeHandleId(handleId?: string | null): string | null {
+  if (!handleId) return null;
+  const trimmed = handleId.trim();
+  return HANDLE_NORMALIZATION[trimmed] ?? trimmed;
+}
+
+function getPortKind(node: FlowNode | undefined, handleId?: string | null): PortKind | undefined {
+  if (!node || !handleId) return undefined;
+
+  const handle = normalizeHandleId(handleId) ?? handleId;
+
+  if (node.data.kind === "request") {
+    if (handle === "text_field") return "text";
+    if (handle === "image_field") return "image";
+  }
+
+  if (node.data.kind === "crop") {
+    if (handle === "input-image" || handle === "output-image") return "image";
+  }
+
+  if (node.data.kind === "gemini") {
+    if (handle === "prompt" || handle === "response") return "text";
+    if (handle === "image") return "image";
+  }
+
+  if (node.data.kind === "response") {
+    if (handle === "result") return "text";
+  }
+
+  return undefined;
+}
+
+function isCompatible(connection: Connection, flowNodes: FlowNode[]) {
+  const sourceNode = flowNodes.find((node) => node.id === connection.source);
+  const targetNode = flowNodes.find((node) => node.id === connection.target);
+  const sourceKind = getPortKind(sourceNode, connection.sourceHandle);
+  const targetKind = getPortKind(targetNode, connection.targetHandle);
 
   if (!sourceKind || !targetKind) return false;
   if (sourceKind === "any" || targetKind === "any") return true;
@@ -337,7 +252,38 @@ function wouldCreateCycle(edges: FlowEdge[], connection: Connection) {
   return visit(connection.target);
 }
 
-function makeAddedNode(kind: "crop" | "gemini", count: number): FlowNode {
+function makeAddedNode(kind: NodeKind, count: number): FlowNode {
+  if (kind === "request") {
+    return {
+      id: "request-inputs",
+      type: "workflowNode",
+      position: { x: 80, y: 220 },
+      deletable: false,
+      data: {
+        title: "Request-Inputs",
+        kind: "request",
+        fixed: true,
+        fields: ["text_field", "image_field"],
+        output: "",
+      },
+    };
+  }
+
+  if (kind === "response") {
+    return {
+      id: "response",
+      type: "workflowNode",
+      position: { x: 720, y: 220 },
+      deletable: false,
+      data: {
+        title: "Response",
+        kind: "response",
+        fixed: true,
+        fields: ["result"],
+      },
+    };
+  }
+
   const id = `${kind}-${Date.now()}-${count}`;
   return {
     id,
@@ -376,23 +322,6 @@ function normalizeFlowNodes(nodes: FlowNode[]): FlowNode[] {
   }));
 }
 
-const HANDLE_NORMALIZATION: Record<string, string> = {
-  inputImage: "input-image",
-  outputImage: "output-image",
-  imageField: "image_field",
-  textField: "text_field",
-  inputimage: "input-image",
-  outputimage: "output-image",
-  imagefield: "image_field",
-  textfield: "text_field",
-};
-
-function normalizeHandleId(handleId?: string | null): string | null {
-  if (!handleId) return null;
-  const trimmed = handleId.trim();
-  return HANDLE_NORMALIZATION[trimmed] ?? trimmed;
-}
-
 function normalizeFlowEdges(edges: FlowEdge[]): FlowEdge[] {
   return edges.map((edge) => {
     return {
@@ -426,10 +355,7 @@ export default function WorkflowCanvas({
       };
     }
 
-    return {
-      nodes: INITIAL_NODES,
-      edges: INITIAL_EDGES,
-    };
+    return EMPTY_SNAPSHOT;
   }, [initialFlow]);
 
   const [nodes, setNodes] = useState<FlowNode[]>(initialSnapshot.nodes);
@@ -517,7 +443,7 @@ export default function WorkflowCanvas({
         targetHandle: normalizeHandleId(connection.targetHandle ? String(connection.targetHandle) : undefined),
       };
 
-      if (!isCompatible(normalizedConnection)) {
+      if (!isCompatible(normalizedConnection, nodes)) {
         setToast("Invalid drag rejected: handle types do not match.");
         return;
       }
@@ -528,7 +454,8 @@ export default function WorkflowCanvas({
       }
 
       pushUndo();
-      const kind = PORT_TYPES[portKey(normalizedConnection.source, normalizedConnection.sourceHandle)];
+      const sourceNode = nodes.find((node) => node.id === normalizedConnection.source);
+      const kind = getPortKind(sourceNode, normalizedConnection.sourceHandle) ?? "text";
       setEdges((current) =>
         addEdge(
           {
@@ -542,19 +469,44 @@ export default function WorkflowCanvas({
       );
       setToast("Connection added.");
     },
-    [edges, pushUndo],
+    [edges, nodes, pushUndo],
   );
 
   const addNode = useCallback(
-    (kind: "crop" | "gemini") => {
+    (kind: NodeKind) => {
+      if (kind === "request" && nodes.some((node) => node.id === "request-inputs")) {
+        setToast("Request-Inputs is already on the canvas.");
+        setPickerOpen(false);
+        return;
+      }
+
+      if (kind === "response" && nodes.some((node) => node.id === "response")) {
+        setToast("Response is already on the canvas.");
+        setPickerOpen(false);
+        return;
+      }
+
       pushUndo();
       const count = nodes.filter((node) => node.data.kind === kind).length + 1;
       setNodes((current) => [...current, makeAddedNode(kind, count)]);
       setPickerOpen(false);
-      setToast(`${kind === "crop" ? "Crop Image" : "Gemini 3.1 Pro"} node added.`);
+      const labels: Record<NodeKind, string> = {
+        request: "Request-Inputs",
+        crop: "Crop Image",
+        gemini: "Gemini 3.1 Pro",
+        response: "Response",
+      };
+      setToast(`${labels[kind]} node added.`);
     },
     [nodes, pushUndo],
   );
+
+  const loadSampleWorkflow = useCallback(() => {
+    pushUndo();
+    setNodes(normalizeFlowNodes(SAMPLE_NODES));
+    setEdges(normalizeFlowEdges(SAMPLE_EDGES));
+    setToast("Sample workflow loaded.");
+  }, [pushUndo]);
 
   const deleteSelected = useCallback(() => {
     const removable = new Set(selectedNodeIds.filter((id) => !REQUIRED_NODE_IDS.has(id)));
@@ -611,10 +563,29 @@ export default function WorkflowCanvas({
 
   const runWorkflow = useCallback(
     (scope: "full" | "selected" | "single") => {
+      if (nodes.length === 0) {
+        setToast("Add nodes before running the workflow.");
+        return;
+      }
+
       timerRef.current.forEach(clearTimeout);
       timerRef.current = [];
 
-      const targetIds = scope === "full" ? nodes.map((node) => node.id) : selectedNodeIds.length ? selectedNodeIds : ["gemini-1"];
+      const executableNodes = nodes.filter((node) => node.id !== "request-inputs" && node.id !== "response");
+      const fallbackSingleId = selectedNodeIds[0] ?? executableNodes[0]?.id;
+      const targetIds =
+        scope === "full"
+          ? nodes.map((node) => node.id)
+          : selectedNodeIds.length
+            ? selectedNodeIds
+            : fallbackSingleId
+              ? [fallbackSingleId]
+              : [];
+
+      if (targetIds.length === 0) {
+        setToast("Select a node to run.");
+        return;
+      }
       const localIds = targetIds.filter((id): id is "request-inputs" | "response" => id === "request-inputs" || id === "response");
       const executableIds = targetIds.filter((id) => id !== "request-inputs" && id !== "response");
 
@@ -822,6 +793,12 @@ export default function WorkflowCanvas({
                 if (file) importJson(file);
               }}
             />
+            <button
+              className="mt-2 w-full rounded-md border border-[#d9d8d2] px-2 py-2 text-xs font-medium hover:bg-[#f7f7f5]"
+              onClick={loadSampleWorkflow}
+            >
+              Load Sample
+            </button>
           </div>
 
           <div className="mt-6 rounded-md border border-[#e6e4df] bg-[#fbfbf9] p-3 text-xs text-[#6d6b65]">
@@ -846,7 +823,7 @@ export default function WorkflowCanvas({
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
-            fitView
+            fitView={nodes.length > 0}
             deleteKeyCode={["Backspace", "Delete"]}
             proOptions={{ hideAttribution: true }}
             nodesDraggable
@@ -861,6 +838,15 @@ export default function WorkflowCanvas({
               nodeColor={(node) => (node.data?.kind === "crop" ? "#7c8cff" : node.data?.kind === "gemini" ? "#ffb15f" : "#191919")}
             />
           </ReactFlow>
+
+          {nodes.length === 0 ? (
+            <div className="pointer-events-none absolute inset-0 z-[5] flex items-center justify-center">
+              <div className="rounded-lg border border-dashed border-[#d9d8d2] bg-white/90 px-8 py-6 text-center shadow-sm">
+                <p className="text-sm font-medium text-[#333]">Your workflow is empty</p>
+                <p className="mt-2 text-sm text-[#77756f]">Click + below to add nodes and get started</p>
+              </div>
+            </div>
+          ) : null}
 
           <div className="absolute bottom-5 left-1/2 z-20 -translate-x-1/2">
             <div className="relative flex items-center gap-2 rounded-md border border-[#dedbd4] bg-white px-2 py-2 shadow-lg">
