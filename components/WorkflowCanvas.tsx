@@ -10,6 +10,7 @@ import ReactFlow, {
   applyEdgeChanges,
   applyNodeChanges,
   type Connection,
+  ConnectionLineType,
   type EdgeChange,
   MarkerType,
   type NodeChange,
@@ -35,8 +36,6 @@ import {
 } from "@/components/workflow/types";
 
 const REQUIRED_NODE_IDS = new Set(["request-inputs", "response"]);
-
-const EMPTY_SNAPSHOT: Snapshot = { nodes: [], edges: [] };
 
 const STARTER_NODES: FlowNode[] = [
   {
@@ -1211,7 +1210,7 @@ export default function WorkflowCanvas({
               nodesConnectable
               defaultEdgeOptions={{ type: "smoothstep", animated: true, markerEnd: { type: MarkerType.ArrowClosed }, style: { strokeWidth: 2 } }}
               connectionLineStyle={{ stroke: "#2563eb", strokeWidth: 2 }}
-              connectionLineType="smoothstep"
+              connectionLineType={ConnectionLineType.SmoothStep}
             >
               <Background color="#cfd7e6" gap={18} size={1.2} variant={BackgroundVariant.Dots} />
               <Controls position="bottom-left" showInteractive={false} />
