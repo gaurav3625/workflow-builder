@@ -7,12 +7,12 @@ import type { FlowNodeData, PortKind, RunStatus } from "./types";
 
 const NODE_KIND_META: Record<
   FlowNodeData["kind"],
-  { label: string; shortLabel: string; accent: string; softBg: string; icon: string }
+  { label: string; accent: string; softBg: string; icon: string }
 > = {
-  request: { label: "Request", shortLabel: "Input", accent: "#2563eb", softBg: "#eff6ff", icon: "IN" },
-  crop: { label: "Transform", shortLabel: "Crop", accent: "#7c3aed", softBg: "#f5f3ff", icon: "CR" },
-  gemini: { label: "LLM", shortLabel: "Gemini", accent: "#6366f1", softBg: "#eef2ff", icon: "AI" },
-  response: { label: "Response", shortLabel: "Output", accent: "#059669", softBg: "#ecfdf5", icon: "OUT" },
+  request: { label: "Request", accent: "#2563eb", softBg: "#eff6ff", icon: "IN" },
+  crop: { label: "Transform", accent: "#7c3aed", softBg: "#f5f3ff", icon: "CR" },
+  gemini: { label: "LLM", accent: "#6366f1", softBg: "#eef2ff", icon: "AI" },
+  response: { label: "Response", accent: "#059669", softBg: "#ecfdf5", icon: "OUT" },
 };
 
 function statusClass(status: RunStatus = "idle") {
@@ -41,6 +41,12 @@ function StatusBadge({ status = "idle" }: { status?: RunStatus }) {
   }
 
   return null;
+}
+
+function compact(value?: string, fallback = "Not configured") {
+  const trimmed = value?.trim();
+  if (!trimmed) return fallback;
+  return trimmed.length > 54 ? `${trimmed.slice(0, 54)}...` : trimmed;
 }
 
 function truncateOutput(value: string, max = 120) {
@@ -77,7 +83,7 @@ function ExecutionOutputSection({ data }: { data: FlowNodeData }) {
                 <StatusBadge status={status} />
                 {data.duration ? <span className="text-[11px] text-[#737373]">{data.duration}</span> : null}
               </div>
-              <pre className="workflow-node-output-text">{truncateOutput(preview, 400)}</pre>
+              <pre className="workflow-node-output-text">{truncateOutput(preview, 280)}</pre>
             </div>
           ) : (
             <div className="workflow-node-output-empty">
@@ -90,82 +96,45 @@ function ExecutionOutputSection({ data }: { data: FlowNodeData }) {
   );
 }
 
-function Port({
+function PortRow({
   id,
   type,
   label,
   kind,
   side,
+  detail,
 }: {
   id: string;
   type: "source" | "target";
   label: string;
   kind: PortKind;
   side: "left" | "right";
+  detail?: string;
 }) {
   const position = side === "left" ? Position.Left : Position.Right;
 
   return (
     <div className={`workflow-port workflow-port--${side}`}>
       {side === "left" ? (
-        <>
-          <Handle
-            id={id}
-            type={type}
-            position={position}
-            className={`workflow-handle workflow-handle--${kind}`}
-          />
-          <span className="workflow-port-label">{label}</span>
-        </>
-      ) : (
-        <>
-          <span className="workflow-port-label">{label}</span>
-          <Handle
-            id={id}
-            type={type}
-            position={position}
-            className={`workflow-handle workflow-handle--${kind}`}
-          />
-        </>
-      )}
+        <Handle id={id} type={type} position={position} className={`workflow-handle workflow-handle--${kind}`} />
+      ) : null}
+      <div className="workflow-port-copy">
+        <span className="workflow-port-label">{label}</span>
+        {detail ? <span className="workflow-port-detail">{detail}</span> : null}
+      </div>
+      {side === "right" ? (
+        <Handle id={id} type={type} position={position} className={`workflow-handle workflow-handle--${kind}`} />
+      ) : null}
     </div>
   );
 }
 
-function InlineField({
-  label,
-  value,
-  onChange,
-  multiline = false,
-  placeholder,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  multiline?: boolean;
-  placeholder?: string;
-}) {
-  const className = "nodrag nopan nowheel workflow-node-field-input";
-
+function InfoRow({ label, value }: { label: string; value: string }) {
   return (
-    <label className="workflow-node-field">
-      <span className="workflow-node-field-label">{label}</span>
-      {multiline ? (
-        <textarea
-          className={`${className} workflow-node-field-textarea`}
-          value={value}
-          placeholder={placeholder}
-          onChange={(event) => onChange(event.target.value)}
-        />
-      ) : (
-        <input
-          className={className}
-          value={value}
-          placeholder={placeholder}
-          onChange={(event) => onChange(event.target.value)}
-        />
-      )}
-    </label>
+    <div className="workflow-info-row">
+      <span className="workflow-info-label">{label}</span>
+      <span className="workflow-info-value">{value}</span>
+    </div>
   );
 }
 
@@ -219,7 +188,6 @@ function EditableTitle({ nodeId, title }: { nodeId: string; title: string }) {
 }
 
 export default function WorkflowNode({ id, data, selected }: NodeProps<FlowNodeData>) {
-  const { updateNodeData } = useWorkflowEditor();
   const isCrop = data.kind === "crop";
   const isGemini = data.kind === "gemini";
   const isRequest = data.kind === "request";
@@ -227,22 +195,6 @@ export default function WorkflowNode({ id, data, selected }: NodeProps<FlowNodeD
   const crop = useMemo(() => data.crop ?? { x: 0, y: 0, width: 100, height: 100 }, [data.crop]);
   const status = data.status ?? "idle";
   const meta = NODE_KIND_META[data.kind];
-
-  const patch = useCallback(
-    (next: Partial<FlowNodeData>) => {
-      updateNodeData(id, next);
-    },
-    [id, updateNodeData],
-  );
-
-  const patchCrop = useCallback(
-    (field: "x" | "y" | "width" | "height", raw: string) => {
-      const parsed = Number(raw);
-      if (Number.isNaN(parsed)) return;
-      patch({ crop: { ...crop, [field]: parsed } });
-    },
-    [crop, patch],
-  );
 
   return (
     <div
@@ -266,78 +218,34 @@ export default function WorkflowNode({ id, data, selected }: NodeProps<FlowNodeD
 
       <section className="workflow-node-body">
         {isRequest ? (
-          <div className="space-y-3">
-            <InlineField
-              label="text_field"
-              value={data.output ?? ""}
-              multiline
-              placeholder="Enter request text input..."
-              onChange={(value) => patch({ output: value })}
-            />
-            <div className="workflow-node-port-list">
-              <Port id="text_field" type="source" side="right" label="text_field" kind="text" />
-              <Port id="image_field" type="source" side="right" label="image_field" kind="image" />
-            </div>
+          <div className="workflow-node-stack">
+            <PortRow id="text_field" type="source" side="right" label="text_field" kind="text" detail={compact(data.output, "Text input")} />
+            <PortRow id="image_field" type="source" side="right" label="image_field" kind="image" detail="Image input" />
           </div>
         ) : null}
 
         {isCrop ? (
-          <div className="space-y-3">
-            <Port id="input-image" type="target" side="left" label="Input Image" kind="image" />
-            <div className="grid grid-cols-2 gap-2">
-              {(["x", "y", "width", "height"] as const).map((field) => (
-                <label key={field} className="workflow-node-field">
-                  <span className="workflow-node-field-label">{field}</span>
-                  <input
-                    className="nodrag nopan nowheel workflow-node-field-input"
-                    type="number"
-                    min={0}
-                    max={100}
-                    value={crop[field]}
-                    onChange={(event) => patchCrop(field, event.target.value)}
-                  />
-                </label>
-              ))}
-            </div>
-            <div className="workflow-node-note">Trigger.dev task with mandatory 30+ second wait.</div>
-            <Port id="output-image" type="source" side="right" label="Output Image" kind="image" />
+          <div className="workflow-node-stack">
+            <PortRow id="input-image" type="target" side="left" label="Input Image" kind="image" />
+            <InfoRow label="Crop" value={`${crop.x}, ${crop.y}, ${crop.width} x ${crop.height}%`} />
+            <InfoRow label="Wait" value="30+ sec" />
+            <PortRow id="output-image" type="source" side="right" label="Output Image" kind="image" />
           </div>
         ) : null}
 
         {isGemini ? (
-          <div className="space-y-3">
-            <div className="workflow-node-port-list">
-              <Port id="prompt" type="target" side="left" label="Prompt" kind="text" />
-              <Port id="image" type="target" side="left" label="Image" kind="image" />
-            </div>
-            <InlineField
-              label="System Prompt"
-              value={data.systemPrompt ?? ""}
-              multiline
-              placeholder="System instructions..."
-              onChange={(value) => patch({ systemPrompt: value })}
-            />
-            <InlineField
-              label="Prompt reference"
-              value={data.prompt ?? ""}
-              placeholder="e.g. Request-Inputs.text_field"
-              onChange={(value) => patch({ prompt: value })}
-            />
-            <div className="workflow-node-note">Model: Gemini 3.1 Pro</div>
-            <Port id="response" type="source" side="right" label="Response" kind="text" />
+          <div className="workflow-node-stack">
+            <PortRow id="prompt" type="target" side="left" label="Prompt" kind="text" detail={compact(data.prompt, "Prompt input")} />
+            <PortRow id="image" type="target" side="left" label="Image" kind="image" detail="Optional vision input" />
+            <InfoRow label="System" value={compact(data.systemPrompt, "System prompt")} />
+            <InfoRow label="Model" value="Gemini 3.1 Pro" />
+            <PortRow id="response" type="source" side="right" label="Response" kind="text" />
           </div>
         ) : null}
 
         {isResponse ? (
-          <div className="space-y-3">
-            <Port id="result" type="target" side="left" label="result" kind="text" />
-            <InlineField
-              label="Notes"
-              value={data.output ?? ""}
-              multiline
-              placeholder="Optional response notes..."
-              onChange={(value) => patch({ output: value })}
-            />
+          <div className="workflow-node-stack">
+            <PortRow id="result" type="target" side="left" label="result" kind="text" detail={compact(data.output, "Final output")} />
           </div>
         ) : null}
       </section>
