@@ -638,6 +638,13 @@ export default function WorkflowCanvas({
     };
   }, [fetchHistoryRuns]);
 
+  // "Starter-only" = a fresh workflow showing just the fixed Request-Inputs +
+  // Response nodes, with nothing else added and the sample not yet loaded.
+  const isStarterOnlyCanvas = useMemo(
+    () => nodes.length === REQUIRED_NODE_IDS.size && nodes.every((node) => REQUIRED_NODE_IDS.has(node.id)),
+    [nodes],
+  );
+
   const selectedNodeIds = useMemo(() => nodes.filter((node) => node.selected).map((node) => node.id), [nodes]);
   const selectedNode = useMemo(
     () => (selectedNodeIds.length === 1 ? nodes.find((node) => node.id === selectedNodeIds[0]) ?? null : null),
@@ -1244,6 +1251,24 @@ export default function WorkflowCanvas({
                   <div className="mx-auto grid size-12 place-items-center rounded-full bg-[#eef4ff] text-[12px] font-semibold text-[#2563eb]">CN</div>
                   <p className="mt-3 text-[14px] font-semibold text-[#111827]">Canvas is empty</p>
                   <p className="mt-1 text-[12px] text-[#6b7280]">Drag a node from the palette to start building.</p>
+                </div>
+              </div>
+            ) : null}
+
+            {isStarterOnlyCanvas ? (
+              <div className="pointer-events-none absolute left-1/2 top-6 z-[6] -translate-x-1/2">
+                <div className="pointer-events-auto flex flex-col items-center gap-3 rounded-lg border border-[#dbe3f2] bg-white/95 px-6 py-5 text-center shadow-[0_10px_30px_rgba(15,23,42,0.10)] backdrop-blur-sm">
+                  <div>
+                    <p className="text-[15px] font-semibold text-[#111827]">Start with a sample workflow</p>
+                    <p className="mt-1 text-[12px] text-[#6b7280]">See a connected example with Request-Inputs, processing, and Response.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={loadSampleWorkflow}
+                    className="rounded-md bg-[#2563eb] px-4 py-2 text-[13px] font-semibold text-white shadow-sm transition hover:bg-[#1d4ed8]"
+                  >
+                    Load Sample Workflow
+                  </button>
                 </div>
               </div>
             ) : null}
