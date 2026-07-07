@@ -391,6 +391,26 @@ function formatDurationMs(durationMs: number | null): string {
   return `${(durationMs / 1000).toFixed(1)}s`;
 }
 
+// Formats a run timestamp on the client so it follows the browser's local
+// timezone (the API returns an ISO string; the server would otherwise format
+// it in UTC on Vercel). The history panel is rendered entirely client-side and
+// re-polled every few seconds, so the relative labels stay fresh.
+function formatRunTimestamp(iso: string): string {
+  const value = new Date(iso);
+  if (Number.isNaN(value.getTime())) return "";
+
+  const elapsedMinutes = Math.floor((Date.now() - value.getTime()) / 60000);
+  if (elapsedMinutes < 1) return "Just now";
+  if (elapsedMinutes < 60) return `${elapsedMinutes} min ago`;
+
+  return value.toLocaleString("en", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 
 function buildNodeResult(node: FlowNode): string {
   return JSON.stringify({
@@ -1329,7 +1349,7 @@ export default function WorkflowCanvas({
                           <div className="min-w-0">
                             <div className="truncate text-[14px] font-medium text-[#111827]">{draftWorkflowName}</div>
                             <div className="mt-0.5 flex items-center gap-2 text-[11px] text-[#6b7280]">
-                              <span>{run.startedAtLabel}</span>
+                              <span>{formatRunTimestamp(run.startedAt)}</span>
                               <span>{run.nodeCount} {run.nodeCount === 1 ? "node" : "nodes"}</span>
                             </div>
                           </div>

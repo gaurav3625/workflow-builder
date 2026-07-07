@@ -3,17 +3,9 @@ import { auth } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/prisma";
 import { createWorkflow, deleteWorkflow } from "@/lib/actions/workflow";
 import WorkflowRenameForm from "@/components/dashboard/WorkflowRenameForm";
+import LocalTimestamp from "@/components/dashboard/LocalTimestamp";
 import { databaseUnavailableMessage, isDatabaseConnectionError } from "@/lib/prisma-errors";
 import Link from "next/link";
-
-function formatUpdatedAt(date: Date) {
-  return new Intl.DateTimeFormat("en", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(date);
-}
 
 export default async function DashboardPage() {
   const { userId, redirectToSignIn } = await auth();
@@ -118,7 +110,9 @@ export default async function DashboardPage() {
                     <span className="w-fit rounded-full bg-[#ecf8ef] px-2 py-1 text-xs font-medium text-[#257942]">
                       {workflow.status}
                     </span>
-                    <span className="text-sm text-[#77756f]">{formatUpdatedAt(workflow.updatedAt)}</span>
+                    <span className="text-sm text-[#77756f]">
+                      <LocalTimestamp iso={workflow.updatedAt.toISOString()} />
+                    </span>
                     <div className="flex flex-wrap items-center gap-2">
                       <Link
                         href={`/dashboard/workflow/${workflow.id}`}
