@@ -478,6 +478,7 @@ export default function WorkflowCanvas({
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance | null>(null);
   const [expandedRun, setExpandedRun] = useState<string | null>(null);
   const [historyRuns, setHistoryRuns] = useState<HistoryRun[]>([]);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [toast, setToast] = useState("Ready");
   const [connectionToast, setConnectionToast] = useState<string | null>(null);
   const [undoStack, setUndoStack] = useState<Snapshot[]>([]);
@@ -551,13 +552,21 @@ export default function WorkflowCanvas({
   const fetchHistoryRuns = useCallback(async () => {
     try {
       const response = await fetch(`/api/runs?workflowId=${encodeURIComponent(workflowId)}`, { method: "GET" });
-      if (!response.ok) return;
+      if (!response.ok) {
+        // Surface the failure instead of swallowing it — keep the last known
+        // history visible, but tell the user the panel is not live.
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        setHistoryError(payload?.error ?? "Couldn't refresh run history. Retrying…");
+        return;
+      }
       const payload = (await response.json()) as { runs?: HistoryRun[] };
       if (Array.isArray(payload.runs)) {
         setHistoryRuns(payload.runs);
       }
+      setHistoryError(null);
     } catch {
-      // Keep the last known persisted history if a poll fails.
+      // Network/parse failure — keep the last known persisted history, but flag it.
+      setHistoryError("Couldn't reach the server to refresh run history. Retrying…");
     }
   }, [workflowId]);
 
@@ -1265,6 +1274,13 @@ export default function WorkflowCanvas({
                 <h2 className="text-[14px] font-semibold text-[#111827]">Run History</h2>
                 <p className="text-[12px] text-[#6b7280]">Recent workflow executions and node results.</p>
               </div>
+
+              {historyError ? (
+                <div className="mb-3 flex items-start gap-2 rounded-md border border-[#f5d3b0] bg-[#fff8f0] px-3 py-2 text-[12px] text-[#9a5b16]">
+                  <span className="mt-0.5 size-2 shrink-0 rounded-full bg-[#e08a2b]" />
+                  <span>{historyError}</span>
+                </div>
+              ) : null}
 
               <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
                 {historyRuns.length === 0 ? (

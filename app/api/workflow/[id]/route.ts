@@ -1,7 +1,12 @@
 ﻿import { auth } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { databaseUnavailableMessage, isDatabaseConnectionError } from "@/lib/prisma-errors";
+import {
+  databaseUnavailableMessage,
+  isDatabaseConnectionError,
+  isMissingSchemaError,
+  schemaOutOfDateMessage,
+} from "@/lib/prisma-errors";
 import type { RunStatus } from "@prisma/client";
 
 const RUN_STATUS_VALUES = new Set<RunStatus>(["pending", "running", "success", "failed", "partial"]);
@@ -39,6 +44,10 @@ async function ensureWorkflowAccess(workflowId: string, userId: string) {
 }
 
 function databaseErrorResponse(error: unknown) {
+  if (isMissingSchemaError(error)) {
+    console.error("[workflow-api] A required table is missing — a migration has not been applied to this database", error);
+    return NextResponse.json({ error: schemaOutOfDateMessage() }, { status: 503 });
+  }
   if (!isDatabaseConnectionError(error)) throw error;
   console.error("[workflow-api] Database unavailable", error);
   return NextResponse.json({ error: databaseUnavailableMessage() }, { status: 503 });
