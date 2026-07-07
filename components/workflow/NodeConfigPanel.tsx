@@ -35,6 +35,58 @@ function Field({
   );
 }
 
+function ImageField({
+  value,
+  onChange,
+}: {
+  value?: string;
+  onChange: (value: string | undefined) => void;
+}) {
+  const handleFile = (file: File | undefined) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      // Store the image inline as a base64 data URL so downstream nodes can
+      // consume it the same way text_field content (data.output) flows.
+      if (typeof reader.result === "string") onChange(reader.result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  return (
+    <div className="block space-y-1.5">
+      <span className="text-xs font-medium text-[#55524b]">Image field</span>
+      {value ? (
+        <div className="flex items-center gap-3">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={value}
+            alt="Selected image_field preview"
+            className="size-16 shrink-0 rounded-md border border-[#e6e4df] object-cover"
+          />
+          <button
+            type="button"
+            className="rounded-md border border-[#f0c5c5] px-2.5 py-1.5 text-xs font-medium text-[#a83232] hover:bg-[#fff6f6]"
+            onClick={() => onChange(undefined)}
+          >
+            Remove
+          </button>
+        </div>
+      ) : null}
+      <input
+        className="block w-full text-xs text-[#55524b] file:mr-3 file:rounded-md file:border file:border-[#d9d8d2] file:bg-white file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-[#333] hover:file:border-[#8f87ff]"
+        type="file"
+        accept="image/*"
+        onChange={(event) => {
+          handleFile(event.target.files?.[0]);
+          // Allow re-selecting the same file after a remove.
+          event.target.value = "";
+        }}
+      />
+    </div>
+  );
+}
+
 export default function NodeConfigPanel({ node, onUpdate }: NodeConfigPanelProps) {
   if (!node) {
     return (
@@ -59,12 +111,18 @@ export default function NodeConfigPanel({ node, onUpdate }: NodeConfigPanelProps
         <Field label="Name" value={data.title} onChange={(value) => patch({ title: value.trim() || data.title })} />
 
         {data.kind === "request" ? (
-          <Field
-            label="Text field content"
-            value={data.output ?? ""}
-            multiline
-            onChange={(value) => patch({ output: value })}
-          />
+          <>
+            <Field
+              label="Text field content"
+              value={data.output ?? ""}
+              multiline
+              onChange={(value) => patch({ output: value })}
+            />
+            <ImageField
+              value={data.imageData}
+              onChange={(imageData) => patch({ imageData })}
+            />
+          </>
         ) : null}
 
         {data.kind === "crop" ? (

@@ -191,8 +191,8 @@ function edge(source: string, sourceHandle: string, target: string, targetHandle
 
 const nodeTypes = { workflowNode: WorkflowNode };
 
-function buildRunOutput(node: FlowNode): string {
-  return buildNodeResult(node);
+function buildRunOutput(node: FlowNode, flowNodes: FlowNode[] = [], flowEdges: FlowEdge[] = []): string {
+  return buildNodeResult(node, flowNodes, flowEdges);
 }
 
 const HANDLE_NORMALIZATION: Record<string, string> = {
@@ -204,6 +204,23 @@ const HANDLE_NORMALIZATION: Record<string, string> = {
   outputimage: "output-image",
   imagefield: "image_field",
   textfield: "text_field",
+  cropX: "crop-x",
+  cropY: "crop-y",
+  cropWidth: "crop-width",
+  cropHeight: "crop-height",
+  cropx: "crop-x",
+  cropy: "crop-y",
+  cropwidth: "crop-width",
+  cropheight: "crop-height",
+};
+
+const CROP_PARAM_FIELDS = ["x", "y", "width", "height"] as const;
+type CropParamField = (typeof CROP_PARAM_FIELDS)[number];
+const CROP_PARAM_HANDLES: Record<CropParamField, string> = {
+  x: "crop-x",
+  y: "crop-y",
+  width: "crop-width",
+  height: "crop-height",
 };
 
 function normalizeHandleId(handleId?: string | null): string | null {
@@ -224,6 +241,7 @@ function getPortKind(node: FlowNode | undefined, handleId?: string | null): Port
 
   if (node.data.kind === "crop") {
     if (handle === "input-image" || handle === "output-image") return "image";
+    if (handle === "crop-x" || handle === "crop-y" || handle === "crop-width" || handle === "crop-height") return "number";
   }
 
   if (node.data.kind === "gemini") {
@@ -412,12 +430,61 @@ function formatRunTimestamp(iso: string): string {
 }
 
 
-function buildNodeResult(node: FlowNode): string {
-  return JSON.stringify({
+// Reads a numeric value emitted by a source node's handle, if that handle
+// carries a number. Numeric outputs currently originate from a crop node's
+// parameter handles; returns null when no numeric value is available.
+function readIncomingNumber(sourceNode: FlowNode | undefined, sourceHandle?: string | null): number | null {
+  if (!sourceNode) return null;
+  if (getPortKind(sourceNode, sourceHandle) !== "number") return null;
+
+  const handle = normalizeHandleId(sourceHandle);
+  if (sourceNode.data.kind === "crop" && handle) {
+    const field = (Object.keys(CROP_PARAM_HANDLES) as CropParamField[]).find((key) => CROP_PARAM_HANDLES[key] === handle);
+    const value = field ? sourceNode.data.crop?.[field] : undefined;
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
+  }
+  return null;
+}
+
+// Resolves the crop node's effective parameters at execution time: for each of
+// x/y/width/height, use the value coming in over a connected handle when one is
+// wired, otherwise fall back to the manual value in the config panel. Manual
+// entry is never disabled — it is simply the fallback.
+function resolveCropParams(node: FlowNode, flowNodes: FlowNode[], flowEdges: FlowEdge[]) {
+  const config = node.data.crop ?? { x: 0, y: 0, width: 100, height: 100 };
+  const resolved: Record<CropParamField, number> = { ...config };
+  const sources: Record<CropParamField, string> = { x: "manual", y: "manual", width: "manual", height: "manual" };
+
+  for (const field of CROP_PARAM_FIELDS) {
+    const incomingEdge = flowEdges.find(
+      (item) => item.target === node.id && normalizeHandleId(item.targetHandle) === CROP_PARAM_HANDLES[field],
+    );
+    if (!incomingEdge) continue;
+
+    const sourceNode = flowNodes.find((item) => item.id === incomingEdge.source);
+    const incomingValue = readIncomingNumber(sourceNode, incomingEdge.sourceHandle);
+    if (incomingValue === null) continue;
+
+    resolved[field] = incomingValue;
+    sources[field] = incomingEdge.source;
+  }
+
+  return { resolved, sources };
+}
+
+function buildNodeResult(node: FlowNode, flowNodes: FlowNode[] = [], flowEdges: FlowEdge[] = []): string {
+  const base = {
     nodeId: node.id,
     title: node.data.title,
     type: node.data.kind,
-  });
+  };
+
+  if (node.data.kind === "crop") {
+    const { resolved, sources } = resolveCropParams(node, flowNodes, flowEdges);
+    return JSON.stringify({ ...base, crop: resolved, cropInputs: sources });
+  }
+
+  return JSON.stringify(base);
 }
 
 function buildIncomingDependencies(targetIds: string[], flowEdges: FlowEdge[]): Map<string, string[]> {
@@ -961,7 +1028,7 @@ export default function WorkflowCanvas({
           startedAt: startedAt.toISOString(),
           completedAt: completedAt.toISOString(),
           durationMs: Math.max(0, completedAt.getTime() - startedAt.getTime()),
-          output: buildNodeResult(node),
+          output: buildNodeResult(node, nodes, edges),
         });
       };
 
@@ -1021,7 +1088,7 @@ export default function WorkflowCanvas({
             recordNodeResult(nodeId, nodeStartedAt, nodeCompletedAt);
             updateNodeRunState([nodeId], "success", {
               duration: formatDurationMs(nodeCompletedAt.getTime() - nodeStartedAt.getTime()),
-              runOutput: node ? buildRunOutput(node) : undefined,
+              runOutput: node ? buildRunOutput(node, nodes, edges) : undefined,
             });
             scheduleNext();
           }, simulatedRunDelayMs(nodeId)),
@@ -1055,7 +1122,7 @@ export default function WorkflowCanvas({
                 recordNodeResult("request-inputs", nodeStartedAt, nodeCompletedAt);
                 updateNodeRunState(["request-inputs"], "success", {
                   duration: formatDurationMs(nodeCompletedAt.getTime() - nodeStartedAt.getTime()),
-                  runOutput: node ? buildRunOutput(node) : undefined,
+                  runOutput: node ? buildRunOutput(node, nodes, edges) : undefined,
                 });
                 scheduleNext();
               }, 150),

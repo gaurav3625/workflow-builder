@@ -1,6 +1,6 @@
 ﻿import type { Edge, Node } from "reactflow";
 
-export type PortKind = "text" | "image" | "any" | "result";
+export type PortKind = "text" | "image" | "number" | "any" | "result";
 export type NodeKind = "request" | "crop" | "gemini" | "response";
 export type RunStatus = "idle" | "running" | "success" | "error";
 export type PersistedStatus = "pending" | "running" | "success" | "failed" | "partial";
@@ -15,6 +15,8 @@ export type FlowNodeData = {
   systemPrompt?: string;
   prompt?: string;
   output?: string;
+  /** Base64 data URL for the Request-Inputs image_field, consumed downstream like `output` (text_field). */
+  imageData?: string;
   runOutput?: string;
   runError?: string;
   crop?: {

@@ -103,6 +103,7 @@ function PortRow({
   kind,
   side,
   detail,
+  param = false,
 }: {
   id: string;
   type: "source" | "target";
@@ -110,20 +111,22 @@ function PortRow({
   kind: PortKind;
   side: "left" | "right";
   detail?: string;
+  param?: boolean;
 }) {
   const position = side === "left" ? Position.Left : Position.Right;
+  const handleClass = `workflow-handle workflow-handle--${kind}${param ? " workflow-handle--param" : ""}`;
 
   return (
-    <div className={`workflow-port workflow-port--${side}`}>
+    <div className={`workflow-port workflow-port--${side}${param ? " workflow-port--param" : ""}`}>
       {side === "left" ? (
-        <Handle id={id} type={type} position={position} className={`workflow-handle workflow-handle--${kind}`} />
+        <Handle id={id} type={type} position={position} className={handleClass} />
       ) : null}
       <div className="workflow-port-copy">
         <span className="workflow-port-label">{label}</span>
         {detail ? <span className="workflow-port-detail">{detail}</span> : null}
       </div>
       {side === "right" ? (
-        <Handle id={id} type={type} position={position} className={`workflow-handle workflow-handle--${kind}`} />
+        <Handle id={id} type={type} position={position} className={handleClass} />
       ) : null}
     </div>
   );
@@ -220,13 +223,27 @@ export default function WorkflowNode({ id, data, selected }: NodeProps<FlowNodeD
         {isRequest ? (
           <div className="workflow-node-stack">
             <PortRow id="text_field" type="source" side="right" label="text_field" kind="text" detail={compact(data.output, "Text input")} />
-            <PortRow id="image_field" type="source" side="right" label="image_field" kind="image" detail="Image input" />
+            <PortRow id="image_field" type="source" side="right" label="image_field" kind="image" detail={data.imageData ? "Image attached" : "Image input"} />
+            {data.imageData ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={data.imageData}
+                alt="image_field preview"
+                className="mt-1 h-16 w-full rounded-md border border-[#e5e5e5] object-cover"
+              />
+            ) : null}
           </div>
         ) : null}
 
         {isCrop ? (
           <div className="workflow-node-stack">
             <PortRow id="input-image" type="target" side="left" label="Input Image" kind="image" />
+            <div className="workflow-node-params">
+              <PortRow id="crop-x" type="target" side="left" label="x" kind="number" param detail={`${crop.x}`} />
+              <PortRow id="crop-y" type="target" side="left" label="y" kind="number" param detail={`${crop.y}`} />
+              <PortRow id="crop-width" type="target" side="left" label="width" kind="number" param detail={`${crop.width}`} />
+              <PortRow id="crop-height" type="target" side="left" label="height" kind="number" param detail={`${crop.height}`} />
+            </div>
             <InfoRow label="Crop" value={`${crop.x}, ${crop.y}, ${crop.width} x ${crop.height}%`} />
             <InfoRow label="Wait" value="30+ sec" />
             <PortRow id="output-image" type="source" side="right" label="Output Image" kind="image" />
