@@ -1,7 +1,12 @@
 ﻿import { auth } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { databaseUnavailableMessage, isDatabaseConnectionError } from "@/lib/prisma-errors";
+import {
+  databaseUnavailableMessage,
+  isDatabaseConnectionError,
+  isMissingSchemaError,
+  schemaOutOfDateMessage,
+} from "@/lib/prisma-errors";
 
 function formatStartedAt(value: Date) {
   const elapsedMs = Date.now() - value.getTime();
@@ -85,6 +90,10 @@ export async function GET(request: Request) {
       }),
     });
   } catch (error) {
+    if (isMissingSchemaError(error)) {
+      console.error("[runs] Run history tables are missing — a migration has not been applied to this database", error);
+      return NextResponse.json({ error: schemaOutOfDateMessage(), runs: [] }, { status: 503 });
+    }
     if (!isDatabaseConnectionError(error)) throw error;
     console.error("[runs] Unable to fetch run history", error);
     return NextResponse.json({ error: databaseUnavailableMessage(), runs: [] }, { status: 503 });
