@@ -5,6 +5,7 @@ import ReactFlow, {
   Background,
   BackgroundVariant,
   Controls,
+  ControlButton,
   MiniMap,
   addEdge,
   applyEdgeChanges,
@@ -1306,7 +1307,10 @@ export default function WorkflowCanvas({
               onConnect={onConnect}
               isValidConnection={isValidConnection}
               onInit={setFlowInstance}
-              fitView={nodes.length > 0}
+              fitView
+              fitViewOptions={{ padding: 0.2 }}
+              minZoom={0.2}
+              maxZoom={2.5}
               deleteKeyCode={["Backspace", "Delete"]}
               proOptions={{ hideAttribution: true }}
               nodesDraggable
@@ -1316,7 +1320,17 @@ export default function WorkflowCanvas({
               connectionLineType={ConnectionLineType.SmoothStep}
             >
               <Background color="#d8dde6" gap={20} size={1} variant={BackgroundVariant.Dots} />
-              <Controls position="bottom-left" showInteractive={false} />
+              <Controls position="bottom-left" showInteractive={false} showFitView={false}>
+                <ControlButton
+                  onClick={() => flowInstance?.fitView({ padding: 0.2, duration: 300 })}
+                  title="Fit view"
+                  aria-label="Fit view"
+                >
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4" />
+                  </svg>
+                </ControlButton>
+              </Controls>
               <MiniMap
                 position="bottom-right"
                 pannable
