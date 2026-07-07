@@ -430,6 +430,38 @@ body {
   background: #6366f1;
 }
 
+.react-flow__handle.workflow-handle--number {
+  background: #10b981;
+}
+
+/* Smaller, distinct handles for the crop parameter inputs (x/y/width/height)
+   so they read as secondary next to the main image handle. */
+.react-flow__handle.workflow-handle--param {
+  width: 7px;
+  height: 7px;
+  border-width: 1.5px;
+  border-radius: 2px;
+}
+
+.workflow-port--left .react-flow__handle.workflow-handle--param {
+  left: -11px;
+}
+
+.workflow-node-params {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 10px;
+  border-left: 1px dashed var(--flow-border, #e2e2de);
+  margin: 2px 0;
+}
+
+.workflow-node-params .workflow-port-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
 .react-flow__handle.workflow-handle.connectingto {
   border-color: #ffffff;
   box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.18);
