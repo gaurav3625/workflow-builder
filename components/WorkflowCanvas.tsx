@@ -192,6 +192,14 @@ function edge(source: string, sourceHandle: string, target: string, targetHandle
 
 const nodeTypes = { workflowNode: WorkflowNode };
 
+function PanelChevron({ pointing }: { pointing: "left" | "right" }) {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      {pointing === "left" ? <path d="M15 18l-6-6 6-6" /> : <path d="M9 18l6-6-6-6" />}
+    </svg>
+  );
+}
+
 function buildRunOutput(node: FlowNode, flowNodes: FlowNode[] = [], flowEdges: FlowEdge[] = []): string {
   return buildNodeResult(node, flowNodes, flowEdges);
 }
@@ -473,6 +481,73 @@ function resolveCropParams(node: FlowNode, flowNodes: FlowNode[], flowEdges: Flo
   return { resolved, sources };
 }
 
+// Image target handles that can receive an upstream image, per node kind.
+const IMAGE_INPUT_HANDLES: Partial<Record<NodeKind, string[]>> = {
+  crop: ["input-image"],
+  gemini: ["image"],
+};
+
+// The image (base64 data URL) a source node emits on a given source handle.
+function getEmittedImage(sourceNode: FlowNode | undefined, sourceHandle?: string | null): string | undefined {
+  if (!sourceNode) return undefined;
+  const handle = normalizeHandleId(sourceHandle);
+  if (sourceNode.data.kind === "request" && handle === "image_field") return sourceNode.data.imageData;
+  if (sourceNode.data.kind === "crop" && handle === "output-image") return sourceNode.data.outputImage;
+  return undefined;
+}
+
+// Resolves the image arriving at a node's image-input handle from its upstream
+// connection, following the same data-flow pattern the request image uses.
+function resolveIncomingImage(
+  nodeId: string,
+  targetHandle: string,
+  flowNodes: FlowNode[],
+  flowEdges: FlowEdge[],
+): string | undefined {
+  const incomingEdge = flowEdges.find(
+    (item) => item.target === nodeId && normalizeHandleId(item.targetHandle) === targetHandle,
+  );
+  if (!incomingEdge) return undefined;
+  const sourceNode = flowNodes.find((item) => item.id === incomingEdge.source);
+  return getEmittedImage(sourceNode, incomingEdge.sourceHandle);
+}
+
+// Crops a base64 image to the given x/y/width/height percentages using a canvas
+// (client-side only). Returns a new base64 data URL of the cropped region.
+function cropImageToDataUrl(
+  src: string,
+  region: { x: number; y: number; width: number; height: number },
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => {
+      const clampPct = (value: number) => Math.min(100, Math.max(0, Number.isFinite(value) ? value : 0));
+      const x = clampPct(region.x);
+      const y = clampPct(region.y);
+      const width = Math.min(clampPct(region.width), 100 - x);
+      const height = Math.min(clampPct(region.height), 100 - y);
+
+      const sx = (x / 100) * image.naturalWidth;
+      const sy = (y / 100) * image.naturalHeight;
+      const sw = Math.max(1, (width / 100) * image.naturalWidth);
+      const sh = Math.max(1, (height / 100) * image.naturalHeight);
+
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(sw);
+      canvas.height = Math.round(sh);
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        reject(new Error("Canvas 2D context unavailable"));
+        return;
+      }
+      ctx.drawImage(image, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL());
+    };
+    image.onerror = () => reject(new Error("Unable to load image for cropping"));
+    image.src = src;
+  });
+}
+
 function buildNodeResult(node: FlowNode, flowNodes: FlowNode[] = [], flowEdges: FlowEdge[] = []): string {
   const base = {
     nodeId: node.id,
@@ -564,9 +639,16 @@ export default function WorkflowCanvas({
   const draftWorkflowNameRef = useRef(workflowName);
   const savedWorkflowNameRef = useRef(workflowName);
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance | null>(null);
+  const [leftCollapsed, setLeftCollapsed] = useState(false);
+  const [rightCollapsed, setRightCollapsed] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerQuery, setPickerQuery] = useState("");
+  const [expandedCategories, setExpandedCategories] = useState<string[]>([...PALETTE_CATEGORIES]);
   const [expandedRun, setExpandedRun] = useState<string | null>(null);
   const [historyRuns, setHistoryRuns] = useState<HistoryRun[]>([]);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyFilter, setHistoryFilter] = useState<"all" | "success" | "failed">("all");
   const [toast, setToast] = useState("Ready");
   const [connectionToast, setConnectionToast] = useState<string | null>(null);
   const [undoStack, setUndoStack] = useState<Snapshot[]>([]);
@@ -726,6 +808,17 @@ export default function WorkflowCanvas({
     };
   }, [fetchHistoryRuns]);
 
+  // Re-frame the graph after a side panel collapses/expands so the canvas fills
+  // the new width with no dead space or clipping. React Flow reflows via its own
+  // ResizeObserver; fitView re-centers once the column transition settles.
+  useEffect(() => {
+    if (!flowInstance) return;
+    const timer = window.setTimeout(() => {
+      flowInstance.fitView({ padding: 0.2, duration: 300 });
+    }, 240);
+    return () => window.clearTimeout(timer);
+  }, [leftCollapsed, rightCollapsed, flowInstance]);
+
   // "Starter-only" = a fresh workflow showing just the fixed Request-Inputs +
   // Response nodes, with nothing else added and the sample not yet loaded.
   const isStarterOnlyCanvas = useMemo(
@@ -756,7 +849,24 @@ export default function WorkflowCanvas({
     );
   }, [markCanvasChanged]);
 
-  const editorContextValue = useMemo(() => ({ updateNodeData }), [updateNodeData]);
+  // Live map of the upstream image arriving at each node's image-input handle,
+  // so nodes can render a thumbnail of what they receive (not just uploads).
+  const incomingImages = useMemo(() => {
+    const result: Record<string, Record<string, string>> = {};
+    for (const node of nodes) {
+      const handles = IMAGE_INPUT_HANDLES[node.data.kind];
+      if (!handles) continue;
+      for (const handle of handles) {
+        const image = resolveIncomingImage(node.id, handle, nodes, edges);
+        if (image) {
+          result[node.id] = { ...(result[node.id] ?? {}), [handle]: image };
+        }
+      }
+    }
+    return result;
+  }, [nodes, edges]);
+
+  const editorContextValue = useMemo(() => ({ updateNodeData, incomingImages }), [updateNodeData, incomingImages]);
 
   const pushUndo = useCallback(() => {
     setUndoStack((stack) => [...stack.slice(-19), cloneSnapshot(nodes, edges)]);
@@ -888,6 +998,69 @@ export default function WorkflowCanvas({
     () => PALETTE_CATEGORIES.map((category) => ({ category, items: filteredPalette.filter((item) => item.category === category) })),
     [filteredPalette],
   );
+
+  // Grouped node list for the searchable picker modal. Mirrors the sidebar
+  // grouping (same NODE_PALETTE / categories); only empty categories are hidden
+  // while searching.
+  const pickerGroups = useMemo(() => {
+    const query = pickerQuery.trim().toLowerCase();
+    return PALETTE_CATEGORIES.map((category) => ({
+      category,
+      items: NODE_PALETTE.filter(
+        (item) =>
+          item.category === category &&
+          (!query || `${item.label} ${item.category} ${item.hint} ${item.kind}`.toLowerCase().includes(query)),
+      ),
+    })).filter((group) => group.items.length > 0);
+  }, [pickerQuery]);
+
+  const pickerHasQuery = pickerQuery.trim().length > 0;
+
+  // Presentation-only filter over the same polled history data.
+  const filteredHistoryRuns = useMemo(() => {
+    if (historyFilter === "all") return historyRuns;
+    return historyRuns.filter((run) => run.status === historyFilter);
+  }, [historyRuns, historyFilter]);
+
+  useEffect(() => {
+    if (!historyOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setHistoryOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [historyOpen]);
+
+  const openNodePicker = useCallback(() => {
+    setPickerQuery("");
+    setExpandedCategories([...PALETTE_CATEGORIES]);
+    setPickerOpen(true);
+  }, []);
+
+  const toggleCategory = useCallback((category: string) => {
+    setExpandedCategories((current) =>
+      current.includes(category) ? current.filter((item) => item !== category) : [...current, category],
+    );
+  }, []);
+
+  const handlePickNode = useCallback(
+    (kind: NodeKind) => {
+      // Reuse the existing add-to-canvas behavior unchanged (adds near the
+      // default drop position, same as a sidebar click today).
+      addNode(kind);
+      setPickerOpen(false);
+    },
+    [addNode],
+  );
+
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPickerOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [pickerOpen]);
   const loadSampleWorkflow = useCallback(() => {
     pushUndo();
     markCanvasChanged();
@@ -1091,6 +1264,28 @@ export default function WorkflowCanvas({
               duration: formatDurationMs(nodeCompletedAt.getTime() - nodeStartedAt.getTime()),
               runOutput: node ? buildRunOutput(node, nodes, edges) : undefined,
             });
+
+            // Crop execution: crop the upstream image by the resolved
+            // x/y/width/height and store the result on the node's outputImage,
+            // which its Output Image thumbnail and downstream nodes then read.
+            if (node?.data.kind === "crop") {
+              const inputImage = resolveIncomingImage(nodeId, "input-image", nodes, edges);
+              if (inputImage) {
+                const { resolved } = resolveCropParams(node, nodes, edges);
+                void cropImageToDataUrl(inputImage, resolved)
+                  .then((cropped) => {
+                    setNodes((current) =>
+                      current.map((item) =>
+                        item.id === nodeId ? { ...item, data: { ...item.data, outputImage: cropped } } : item,
+                      ),
+                    );
+                  })
+                  .catch(() => {
+                    /* leave outputImage unchanged if the image can't be cropped */
+                  });
+              }
+            }
+
             scheduleNext();
           }, simulatedRunDelayMs(nodeId)),
         );
@@ -1171,15 +1366,76 @@ export default function WorkflowCanvas({
   return (
     <WorkflowEditorContext.Provider value={editorContextValue}>
       <main className="h-screen overflow-hidden bg-[#f7f8fa] text-[14px] text-[#171717]">
-        <div className="grid h-full grid-cols-[280px_minmax(0,1fr)_340px]">
-          <aside className="flex min-h-0 flex-col border-r border-[#e3e7ee] bg-[#f7f8fa]">
-            <div className="border-b border-[#e8ecf2] p-4">
-              <div className="flex items-center gap-2">
-                <div className="grid size-8 place-items-center rounded-[10px] bg-[#171717] text-[11px] font-semibold text-white">M</div>
-                <div className="min-w-0">
-                  <h1 className="truncate text-[14px] font-semibold text-[#171717]">Flow</h1>
-                  <p className="text-[11px] text-[#737373]">Drag nodes, connect ports on the canvas</p>
+        <div
+          className="grid h-full transition-[grid-template-columns] duration-200 ease-out"
+          style={{
+            gridTemplateColumns: `${leftCollapsed ? "56px" : "280px"} minmax(0,1fr) ${rightCollapsed ? "0px" : "340px"}`,
+          }}
+        >
+          <aside className="flex min-h-0 flex-col overflow-hidden border-r border-[#e3e7ee] bg-[#f7f8fa]">
+            {leftCollapsed ? (
+              <div className="flex min-h-0 flex-1 flex-col items-center">
+                <div className="flex flex-col items-center gap-3 border-b border-[#e8ecf2] px-2 py-4">
+                  <button
+                    type="button"
+                    onClick={() => setLeftCollapsed(false)}
+                    title="Expand Flow panel"
+                    aria-label="Expand Flow panel"
+                    className="grid size-9 place-items-center rounded-[8px] border border-[#e5e5e5] bg-white text-[#404040] transition hover:bg-[#fafafa]"
+                  >
+                    <PanelChevron pointing="right" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={openNodePicker}
+                    title="Add node"
+                    aria-label="Add node"
+                    className="grid size-9 place-items-center rounded-[8px] bg-[#171717] text-[18px] leading-none text-white transition hover:bg-[#404040]"
+                  >
+                    +
+                  </button>
+                  <div className="grid size-8 place-items-center rounded-[10px] bg-[#171717] text-[11px] font-semibold text-white">M</div>
                 </div>
+                <div className="flex min-h-0 flex-1 flex-col items-center gap-2 overflow-y-auto py-3">
+                  {NODE_PALETTE.map((item) => {
+                    const meta = NODE_KIND_META[item.kind];
+                    return (
+                      <button
+                        key={`rail-${item.label}`}
+                        draggable
+                        onClick={() => addNode(item.kind)}
+                        onDragStart={(event) => onPaletteDragStart(event, item.kind)}
+                        title={item.label}
+                        aria-label={item.label}
+                        className="grid size-9 shrink-0 cursor-grab place-items-center rounded-md border border-[#e1e6ef] bg-white text-[11px] font-semibold text-white transition hover:border-[#2563eb] active:cursor-grabbing"
+                        style={{ backgroundColor: meta.accent }}
+                      >
+                        {item.icon}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              <>
+            <div className="border-b border-[#e8ecf2] p-4">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  <div className="grid size-8 place-items-center rounded-[10px] bg-[#171717] text-[11px] font-semibold text-white">M</div>
+                  <div className="min-w-0">
+                    <h1 className="truncate text-[14px] font-semibold text-[#171717]">Flow</h1>
+                    <p className="text-[11px] text-[#737373]">Drag nodes, connect ports on the canvas</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setLeftCollapsed(true)}
+                  title="Collapse Flow panel"
+                  aria-label="Collapse Flow panel"
+                  className="grid size-7 shrink-0 place-items-center rounded-[8px] border border-[#e5e5e5] bg-white text-[#404040] transition hover:bg-[#fafafa]"
+                >
+                  <PanelChevron pointing="left" />
+                </button>
               </div>
               <input
                 className="mt-4 w-full rounded-[10px] border border-[#e5e5e5] bg-white px-3 py-2 text-[14px] text-[#171717] outline-none transition focus:border-[#6366f1]"
@@ -1187,6 +1443,14 @@ export default function WorkflowCanvas({
                 value={paletteQuery}
                 onChange={(event) => setPaletteQuery(event.target.value)}
               />
+              <button
+                type="button"
+                onClick={openNodePicker}
+                className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-[10px] bg-[#171717] px-3 py-2 text-[13px] font-semibold text-white transition hover:bg-[#404040]"
+              >
+                <span className="text-[15px] leading-none">+</span>
+                Add node
+              </button>
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto p-4">
@@ -1240,6 +1504,8 @@ export default function WorkflowCanvas({
                 <p className="mt-1 text-[12px] text-[#6b7280]">{toast}</p>
               </div>
             </div>
+              </>
+            )}
           </aside>
 
           <section className="relative min-w-0 bg-white" ref={flowWrapperRef} onDragOver={onCanvasDragOver} onDrop={onCanvasDrop}>
@@ -1272,6 +1538,19 @@ export default function WorkflowCanvas({
                 <button className="rounded-[10px] border border-[#e5e5e5] px-3 py-2 text-[12px] font-medium text-[#404040] transition hover:border-[#d4d4d4] hover:bg-[#fafafa]" onClick={() => runWorkflow("selected")}>
                   Run selected
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setHistoryOpen(true)}
+                  title="Execution history"
+                  aria-label="Execution history"
+                  className="grid size-9 place-items-center rounded-[10px] border border-[#e5e5e5] text-[#404040] transition hover:border-[#d4d4d4] hover:bg-[#fafafa]"
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <path d="M3 3v5h5" />
+                    <path d="M3.05 13A9 9 0 1 0 6 5.3L3 8" />
+                    <path d="M12 7v5l3 2" />
+                  </svg>
+                </button>
                 <div className="relative">
                   <button className="grid size-9 place-items-center rounded-[10px] border border-[#e5e5e5] text-[16px] font-semibold text-[#404040] transition hover:bg-[#fafafa]" onClick={() => setMenuOpen((value) => !value)} aria-label="Workflow menu">
                     ...
@@ -1297,6 +1576,22 @@ export default function WorkflowCanvas({
                 />
               </div>
             </div>
+
+            {rightCollapsed ? (
+              <button
+                type="button"
+                onClick={() => setRightCollapsed(false)}
+                title="Expand Inspector panel"
+                aria-label="Expand Inspector panel"
+                className="absolute right-4 top-[70px] z-20 flex items-center gap-1.5 rounded-[10px] border border-[#e5e5e5] bg-white px-2.5 py-2 text-[12px] font-medium text-[#404040] shadow-sm transition hover:bg-[#fafafa]"
+              >
+                <PanelChevron pointing="left" />
+                <span>Inspector</span>
+                {selectedNode ? (
+                  <span className="size-1.5 rounded-full bg-[#2563eb]" title="Node config available" aria-hidden />
+                ) : null}
+              </button>
+            ) : null}
 
             <ReactFlow
               nodes={nodes}
@@ -1390,86 +1685,218 @@ export default function WorkflowCanvas({
             </div>
           </section>
 
-          <aside className="flex min-h-0 flex-col border-l border-[#e3e7ee] bg-white">
+          <aside className="flex min-h-0 flex-col overflow-hidden border-l border-[#e3e7ee] bg-white">
+            <div className="flex h-full min-h-0 w-[340px] flex-col">
+            <div className="flex items-center justify-between border-b border-[#edf0f5] px-4 py-2.5">
+              <span className="text-[12px] font-semibold text-[#374151]">Inspector</span>
+              <button
+                type="button"
+                onClick={() => setRightCollapsed(true)}
+                title="Collapse Inspector panel"
+                aria-label="Collapse Inspector panel"
+                className="grid size-7 shrink-0 place-items-center rounded-[8px] border border-[#e5e5e5] bg-white text-[#404040] transition hover:bg-[#fafafa]"
+              >
+                <PanelChevron pointing="right" />
+              </button>
+            </div>
             <div className="border-b border-[#edf0f5] p-4">
               <NodeConfigPanel node={selectedNode} onUpdate={updateNodeData} />
             </div>
-
-            <div className="flex min-h-0 flex-1 flex-col p-4">
-              <div className="mb-3">
-                <h2 className="text-[14px] font-semibold text-[#111827]">Run History</h2>
-                <p className="text-[12px] text-[#6b7280]">Recent workflow executions and node results.</p>
-              </div>
-
-              {historyError ? (
-                <div className="mb-3 flex items-start gap-2 rounded-md border border-[#f5d3b0] bg-[#fff8f0] px-3 py-2 text-[12px] text-[#9a5b16]">
-                  <span className="mt-0.5 size-2 shrink-0 rounded-full bg-[#e08a2b]" />
-                  <span>{historyError}</span>
-                </div>
-              ) : null}
-
-              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
-                {historyRuns.length === 0 ? (
-                  <div className="grid min-h-[220px] place-items-center rounded-md border border-dashed border-[#d9dee8] bg-[#f9fafb] p-5 text-center">
-                    <div>
-                      <div className="mx-auto grid size-10 place-items-center rounded-full bg-[#eef4ff] text-[12px] font-semibold text-[#2563eb]">RH</div>
-                      <p className="mt-3 text-[14px] font-medium text-[#111827]">No runs yet</p>
-                      <p className="mt-1 text-[12px] text-[#6b7280]">Run the workflow to populate history.</p>
-                    </div>
-                  </div>
-                ) : null}
-
-                {historyRuns.map((run) => {
-                  const expanded = expandedRun === run.id;
-                  const dotClass = run.status === "success" ? "bg-[#16a34a]" : run.status === "failed" ? "bg-[#dc2626]" : "bg-[#f59e0b]";
-                  return (
-                    <div key={run.id} className="rounded-md border border-[#e1e6ef] bg-white">
-                      <button className="w-full px-3 py-3 text-left" onClick={() => setExpandedRun(expanded ? null : run.id)}>
-                        <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3">
-                          <span className={`size-2.5 rounded-full ${dotClass}`} />
-                          <div className="min-w-0">
-                            <div className="truncate text-[14px] font-medium text-[#111827]">{draftWorkflowName}</div>
-                            <div className="mt-0.5 flex items-center gap-2 text-[11px] text-[#6b7280]">
-                              <span>{formatRunTimestamp(run.startedAt)}</span>
-                              <span>{run.nodeCount} {run.nodeCount === 1 ? "node" : "nodes"}</span>
-                            </div>
-                          </div>
-                          <span className="rounded-full bg-[#f3f6fb] px-2 py-1 text-[11px] font-medium text-[#374151]">{formatDurationMs(run.durationMs)}</span>
-                        </div>
-                      </button>
-                      <div className={`grid transition-[grid-template-rows] duration-200 ease-out ${expanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}>
-                        <div className="overflow-hidden">
-                          <div className="border-t border-[#edf0f5] px-3 py-3">
-                            {run.nodes.length === 0 ? (
-                              <div className="grid min-h-[96px] place-items-center rounded-md bg-[#f9fafb] text-center">
-                                <div>
-                                  <div className="mx-auto grid size-8 place-items-center rounded-full bg-[#eef4ff] text-[11px] font-semibold text-[#2563eb]">NR</div>
-                                  <p className="mt-2 text-[12px] text-[#6b7280]">No node output recorded.</p>
-                                </div>
-                              </div>
-                            ) : null}
-                            {run.nodes.map((node) => (
-                              <div key={`${run.id}-${node.id}`} className="grid grid-cols-[auto_1fr] gap-2 py-1.5 text-[12px]">
-                                <span className={`mt-1 size-2 rounded-full ${node.status === "success" ? "bg-[#16a34a]" : node.status === "failed" ? "bg-[#dc2626]" : "bg-[#f59e0b]"}`} />
-                                <div className="min-w-0">
-                                  <div className="flex items-center justify-between gap-2">
-                                    <span className="truncate font-medium text-[#374151]">{node.title}</span>
-                                    <span className="shrink-0 rounded-full bg-[#f3f6fb] px-2 py-0.5 text-[11px] text-[#6b7280]">{formatDurationMs(node.durationMs)}</span>
-                                  </div>
-                                  <p className="mt-0.5 truncate text-[11px] text-[#6b7280]">{node.output}</p>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
             </div>
           </aside>
         </div>
+
+        <div className={`fixed inset-0 z-40 ${historyOpen ? "" : "pointer-events-none"}`} aria-hidden={!historyOpen}>
+          <div
+            className={`absolute inset-0 bg-[rgba(15,23,42,0.25)] transition-opacity duration-300 ${historyOpen ? "opacity-100" : "opacity-0"}`}
+            onClick={() => setHistoryOpen(false)}
+          />
+          <aside
+            className={`absolute right-0 top-0 flex h-full w-full max-w-[380px] flex-col border-l border-[#e3e7ee] bg-white shadow-[-8px_0_30px_rgba(15,23,42,0.12)] transition-transform duration-300 ease-out ${historyOpen ? "translate-x-0" : "translate-x-full"}`}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Execution History"
+          >
+            <div className="flex items-center justify-between border-b border-[#edf0f5] px-4 py-3">
+              <h2 className="text-[15px] font-semibold text-[#111827]">Execution History</h2>
+              <button
+                type="button"
+                onClick={() => setHistoryOpen(false)}
+                className="rounded-md border border-[#e5e5e5] px-3 py-1.5 text-[12px] font-medium text-[#404040] transition hover:bg-[#fafafa]"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between gap-3 border-b border-[#edf0f5] px-4 py-3">
+              <span className="text-[12px] font-semibold uppercase tracking-wide text-[#6b7280]">Run history</span>
+              <select
+                value={historyFilter}
+                onChange={(event) => setHistoryFilter(event.target.value as "all" | "success" | "failed")}
+                aria-label="Filter runs by status"
+                className="rounded-md border border-[#e5e5e5] bg-white px-2.5 py-1.5 text-[12px] font-medium text-[#374151] outline-none transition focus:border-[#6366f1]"
+              >
+                <option value="all">All</option>
+                <option value="success">Success</option>
+                <option value="failed">Failed</option>
+              </select>
+            </div>
+
+            {historyError ? (
+              <div className="mx-4 mt-3 flex items-start gap-2 rounded-md border border-[#f5d3b0] bg-[#fff8f0] px-3 py-2 text-[12px] text-[#9a5b16]">
+                <span className="mt-0.5 size-2 shrink-0 rounded-full bg-[#e08a2b]" />
+                <span>{historyError}</span>
+              </div>
+            ) : null}
+
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+              {filteredHistoryRuns.length === 0 ? (
+                <div className="grid min-h-[220px] place-items-center rounded-md border border-dashed border-[#d9dee8] bg-[#f9fafb] p-5 text-center">
+                  <div>
+                    <div className="mx-auto grid size-10 place-items-center rounded-full bg-[#eef4ff] text-[12px] font-semibold text-[#2563eb]">RH</div>
+                    <p className="mt-3 text-[14px] font-medium text-[#111827]">{historyRuns.length === 0 ? "No runs yet" : "No matching runs"}</p>
+                    <p className="mt-1 text-[12px] text-[#6b7280]">{historyRuns.length === 0 ? "Run the workflow to populate history." : "Try a different filter."}</p>
+                  </div>
+                </div>
+              ) : null}
+
+              {filteredHistoryRuns.map((run) => {
+                const expanded = expandedRun === run.id;
+                const dotClass = run.status === "success" ? "bg-[#16a34a]" : run.status === "failed" ? "bg-[#dc2626]" : "bg-[#f59e0b]";
+                return (
+                  <div key={run.id} className="rounded-md border border-[#e1e6ef] bg-white">
+                    <button className="w-full px-3 py-3 text-left" onClick={() => setExpandedRun(expanded ? null : run.id)}>
+                      <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3">
+                        <span className={`size-2.5 rounded-full ${dotClass}`} />
+                        <div className="min-w-0">
+                          <div className="truncate text-[14px] font-medium text-[#111827]">{draftWorkflowName}</div>
+                          <div className="mt-0.5 flex items-center gap-2 text-[11px] text-[#6b7280]">
+                            <span>{formatRunTimestamp(run.startedAt)}</span>
+                            <span>{run.nodeCount} {run.nodeCount === 1 ? "node" : "nodes"}</span>
+                          </div>
+                        </div>
+                        <span className="rounded-full bg-[#f3f6fb] px-2 py-1 text-[11px] font-medium text-[#374151]">{formatDurationMs(run.durationMs)}</span>
+                      </div>
+                    </button>
+                    <div className={`grid transition-[grid-template-rows] duration-200 ease-out ${expanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}>
+                      <div className="overflow-hidden">
+                        <div className="border-t border-[#edf0f5] px-3 py-3">
+                          {run.nodes.length === 0 ? (
+                            <div className="grid min-h-[96px] place-items-center rounded-md bg-[#f9fafb] text-center">
+                              <div>
+                                <div className="mx-auto grid size-8 place-items-center rounded-full bg-[#eef4ff] text-[11px] font-semibold text-[#2563eb]">NR</div>
+                                <p className="mt-2 text-[12px] text-[#6b7280]">No node output recorded.</p>
+                              </div>
+                            </div>
+                          ) : null}
+                          {run.nodes.map((node) => (
+                            <div key={`${run.id}-${node.id}`} className="grid grid-cols-[auto_1fr] gap-2 py-1.5 text-[12px]">
+                              <span className={`mt-1 size-2 rounded-full ${node.status === "success" ? "bg-[#16a34a]" : node.status === "failed" ? "bg-[#dc2626]" : "bg-[#f59e0b]"}`} />
+                              <div className="min-w-0">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="truncate font-medium text-[#374151]">{node.title}</span>
+                                  <span className="shrink-0 rounded-full bg-[#f3f6fb] px-2 py-0.5 text-[11px] text-[#6b7280]">{formatDurationMs(node.durationMs)}</span>
+                                </div>
+                                <p className="mt-0.5 truncate text-[11px] text-[#6b7280]">{node.output}</p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </aside>
+        </div>
+
+        {pickerOpen ? (
+          <div
+            className="fixed inset-0 z-50 flex items-start justify-center bg-[rgba(15,23,42,0.35)] p-4 pt-[10vh]"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Add a node"
+            onClick={() => setPickerOpen(false)}
+          >
+            <div
+              className="flex max-h-[70vh] w-full max-w-[520px] flex-col overflow-hidden rounded-[14px] border border-[#e3e7ee] bg-white shadow-[0_24px_60px_rgba(15,23,42,0.25)]"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="border-b border-[#eef0f4] p-3">
+                <input
+                  autoFocus
+                  className="w-full rounded-[10px] border border-[#e5e5e5] bg-[#fafafa] px-3 py-2.5 text-[14px] text-[#171717] outline-none transition focus:border-[#6366f1] focus:bg-white"
+                  placeholder="Search nodes or models..."
+                  value={pickerQuery}
+                  onChange={(event) => setPickerQuery(event.target.value)}
+                />
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto p-2">
+                {pickerGroups.length === 0 ? (
+                  <div className="grid min-h-[160px] place-items-center text-center">
+                    <div>
+                      <p className="text-[14px] font-medium text-[#111827]">No nodes found</p>
+                      <p className="mt-1 text-[12px] text-[#6b7280]">Try a different search term.</p>
+                    </div>
+                  </div>
+                ) : (
+                  pickerGroups.map((group) => {
+                    const open = pickerHasQuery || expandedCategories.includes(group.category);
+                    return (
+                      <div key={`picker-${group.category}`} className="mb-1">
+                        <button
+                          type="button"
+                          onClick={() => toggleCategory(group.category)}
+                          className="flex w-full items-center justify-between rounded-md px-2 py-2 text-left transition hover:bg-[#f5f7fb]"
+                          aria-expanded={open}
+                        >
+                          <span className="text-[12px] font-semibold uppercase tracking-wide text-[#6b7280]">
+                            {group.category}
+                          </span>
+                          <span className="flex items-center gap-2 text-[11px] text-[#9aa1ad]">
+                            {group.items.length}
+                            <span className={`transition-transform ${open ? "rotate-90" : ""}`}>
+                              <PanelChevron pointing="right" />
+                            </span>
+                          </span>
+                        </button>
+
+                        {open ? (
+                          <div className="mt-1 space-y-1">
+                            {group.items.map((item) => {
+                              const meta = NODE_KIND_META[item.kind];
+                              return (
+                                <button
+                                  key={`picker-${group.category}-${item.label}`}
+                                  type="button"
+                                  onClick={() => handlePickNode(item.kind)}
+                                  className="flex w-full items-center gap-3 rounded-md border border-transparent px-2.5 py-2 text-left transition hover:border-[#dbe3f2] hover:bg-[#f8fbff]"
+                                >
+                                  <span className="grid size-8 shrink-0 place-items-center rounded-md text-[11px] font-semibold text-white" style={{ backgroundColor: meta.accent }}>
+                                    {item.icon}
+                                  </span>
+                                  <span className="min-w-0 flex-1">
+                                    <span className="block truncate text-[14px] font-medium text-[#111827]">{item.label}</span>
+                                    <span className="block truncate text-[11px] text-[#6b7280]">{item.hint}</span>
+                                  </span>
+                                  <span className="shrink-0 rounded-full bg-[#f3f6fb] px-2 py-0.5 text-[11px] font-medium text-[#6b7280]">
+                                    {meta.label}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+        ) : null}
       </main>
     </WorkflowEditorContext.Provider>
   );

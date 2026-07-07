@@ -17,6 +17,8 @@ export type FlowNodeData = {
   output?: string;
   /** Base64 data URL for the Request-Inputs image_field, consumed downstream like `output` (text_field). */
   imageData?: string;
+  /** Base64 data URL of the Crop node's cropped result, emitted on its `output-image` handle after execution. */
+  outputImage?: string;
   runOutput?: string;
   runError?: string;
   crop?: {

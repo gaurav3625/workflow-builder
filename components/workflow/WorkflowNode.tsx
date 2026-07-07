@@ -190,7 +190,14 @@ function EditableTitle({ nodeId, title }: { nodeId: string; title: string }) {
   );
 }
 
+function ImageThumb({ src, alt }: { src: string; alt: string }) {
+  // Same thumbnail rendering the Request-Inputs image_field uses.
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img src={src} alt={alt} className="mt-1 h-16 w-full rounded-md border border-[#e5e5e5] object-cover" />;
+}
+
 export default function WorkflowNode({ id, data, selected }: NodeProps<FlowNodeData>) {
+  const { incomingImages } = useWorkflowEditor();
   const isCrop = data.kind === "crop";
   const isGemini = data.kind === "gemini";
   const isRequest = data.kind === "request";
@@ -198,6 +205,7 @@ export default function WorkflowNode({ id, data, selected }: NodeProps<FlowNodeD
   const crop = useMemo(() => data.crop ?? { x: 0, y: 0, width: 100, height: 100 }, [data.crop]);
   const status = data.status ?? "idle";
   const meta = NODE_KIND_META[data.kind];
+  const nodeIncomingImages = incomingImages[id] ?? {};
 
   return (
     <div
@@ -237,7 +245,17 @@ export default function WorkflowNode({ id, data, selected }: NodeProps<FlowNodeD
 
         {isCrop ? (
           <div className="workflow-node-stack">
-            <PortRow id="input-image" type="target" side="left" label="Input Image" kind="image" />
+            <PortRow
+              id="input-image"
+              type="target"
+              side="left"
+              label="Input Image"
+              kind="image"
+              detail={nodeIncomingImages["input-image"] ? "Image received" : undefined}
+            />
+            {nodeIncomingImages["input-image"] ? (
+              <ImageThumb src={nodeIncomingImages["input-image"]} alt="Input image preview" />
+            ) : null}
             <div className="workflow-node-params">
               <PortRow id="crop-x" type="target" side="left" label="x" kind="number" param detail={`${crop.x}`} />
               <PortRow id="crop-y" type="target" side="left" label="y" kind="number" param detail={`${crop.y}`} />
@@ -246,14 +264,34 @@ export default function WorkflowNode({ id, data, selected }: NodeProps<FlowNodeD
             </div>
             <InfoRow label="Crop" value={`${crop.x}, ${crop.y}, ${crop.width} x ${crop.height}%`} />
             <InfoRow label="Wait" value="30+ sec" />
-            <PortRow id="output-image" type="source" side="right" label="Output Image" kind="image" />
+            <PortRow
+              id="output-image"
+              type="source"
+              side="right"
+              label="Output Image"
+              kind="image"
+              detail={data.outputImage ? "Cropped result" : undefined}
+            />
+            {data.outputImage ? (
+              <ImageThumb src={data.outputImage} alt="Cropped output preview" />
+            ) : null}
           </div>
         ) : null}
 
         {isGemini ? (
           <div className="workflow-node-stack">
             <PortRow id="prompt" type="target" side="left" label="Prompt" kind="text" detail={compact(data.prompt, "Prompt input")} />
-            <PortRow id="image" type="target" side="left" label="Image" kind="image" detail="Optional vision input" />
+            <PortRow
+              id="image"
+              type="target"
+              side="left"
+              label="Image"
+              kind="image"
+              detail={nodeIncomingImages["image"] ? "Image received" : "Optional vision input"}
+            />
+            {nodeIncomingImages["image"] ? (
+              <ImageThumb src={nodeIncomingImages["image"]} alt="Vision image preview" />
+            ) : null}
             <InfoRow label="System" value={compact(data.systemPrompt, "System prompt")} />
             <InfoRow label="Model" value="Gemini 3.1 Pro" />
             <PortRow id="response" type="source" side="right" label="Response" kind="text" />
