@@ -391,6 +391,26 @@ function formatDurationMs(durationMs: number | null): string {
   return `${(durationMs / 1000).toFixed(1)}s`;
 }
 
+// Formats a run timestamp on the client so it follows the browser's local
+// timezone (the API returns an ISO string; the server would otherwise format
+// it in UTC on Vercel). The history panel is rendered entirely client-side and
+// re-polled every few seconds, so the relative labels stay fresh.
+function formatRunTimestamp(iso: string): string {
+  const value = new Date(iso);
+  if (Number.isNaN(value.getTime())) return "";
+
+  const elapsedMinutes = Math.floor((Date.now() - value.getTime()) / 60000);
+  if (elapsedMinutes < 1) return "Just now";
+  if (elapsedMinutes < 60) return `${elapsedMinutes} min ago`;
+
+  return value.toLocaleString("en", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 
 function buildNodeResult(node: FlowNode): string {
   return JSON.stringify({
@@ -637,6 +657,13 @@ export default function WorkflowCanvas({
       clearInterval(interval);
     };
   }, [fetchHistoryRuns]);
+
+  // "Starter-only" = a fresh workflow showing just the fixed Request-Inputs +
+  // Response nodes, with nothing else added and the sample not yet loaded.
+  const isStarterOnlyCanvas = useMemo(
+    () => nodes.length === REQUIRED_NODE_IDS.size && nodes.every((node) => REQUIRED_NODE_IDS.has(node.id)),
+    [nodes],
+  );
 
   const selectedNodeIds = useMemo(() => nodes.filter((node) => node.selected).map((node) => node.id), [nodes]);
   const selectedNode = useMemo(
@@ -1248,6 +1275,24 @@ export default function WorkflowCanvas({
               </div>
             ) : null}
 
+            {isStarterOnlyCanvas ? (
+              <div className="pointer-events-none absolute left-1/2 top-6 z-[6] -translate-x-1/2">
+                <div className="pointer-events-auto flex flex-col items-center gap-3 rounded-lg border border-[#dbe3f2] bg-white/95 px-6 py-5 text-center shadow-[0_10px_30px_rgba(15,23,42,0.10)] backdrop-blur-sm">
+                  <div>
+                    <p className="text-[15px] font-semibold text-[#111827]">Start with a sample workflow</p>
+                    <p className="mt-1 text-[12px] text-[#6b7280]">See a connected example with Request-Inputs, processing, and Response.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={loadSampleWorkflow}
+                    className="rounded-md bg-[#2563eb] px-4 py-2 text-[13px] font-semibold text-white shadow-sm transition hover:bg-[#1d4ed8]"
+                  >
+                    Load Sample Workflow
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
             <div className="absolute bottom-5 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-[8px] border border-[#e3e7ee] bg-white px-2 py-2 shadow-[0_8px_24px_rgba(15,23,42,0.08)]">
               <button className="rounded-md border border-[#d9dee8] px-3 py-2 text-[12px] font-medium text-[#374151] hover:border-[#2563eb]" disabled={undoStack.length === 0} onClick={undo}>
                 Undo
@@ -1304,7 +1349,7 @@ export default function WorkflowCanvas({
                           <div className="min-w-0">
                             <div className="truncate text-[14px] font-medium text-[#111827]">{draftWorkflowName}</div>
                             <div className="mt-0.5 flex items-center gap-2 text-[11px] text-[#6b7280]">
-                              <span>{run.startedAtLabel}</span>
+                              <span>{formatRunTimestamp(run.startedAt)}</span>
                               <span>{run.nodeCount} {run.nodeCount === 1 ? "node" : "nodes"}</span>
                             </div>
                           </div>
