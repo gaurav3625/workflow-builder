@@ -557,7 +557,12 @@ function buildNodeResult(node: FlowNode, flowNodes: FlowNode[] = [], flowEdges: 
 
   if (node.data.kind === "crop") {
     const { resolved, sources } = resolveCropParams(node, flowNodes, flowEdges);
-    return JSON.stringify({ ...base, crop: resolved, cropInputs: sources });
+    return JSON.stringify({
+      ...base,
+      crop: resolved,
+      cropInputs: sources,
+      outputImage: node.data.outputImage ?? null,
+    });
   }
 
   return JSON.stringify(base);
@@ -1190,8 +1195,8 @@ export default function WorkflowCanvas({
       resetRunState(targetIds);
       const runnableIds = targetIds.filter((id) => id !== "request-inputs");
       const nodeResults = new Map<string, PersistedNodeRun>();
-      const recordNodeResult = (nodeId: string, startedAt: Date, completedAt: Date) => {
-        const node = nodes.find((item) => item.id === nodeId);
+      const recordNodeResult = (nodeId: string, startedAt: Date, completedAt: Date, overrideNode?: FlowNode) => {
+        const node = overrideNode ?? nodes.find((item) => item.id === nodeId);
         if (!node) return;
 
         nodeResults.set(nodeId, {
@@ -1255,38 +1260,54 @@ export default function WorkflowCanvas({
         const nodeStartedAt = new Date();
         timerRef.current.push(
           setTimeout(() => {
-            running.delete(nodeId);
-            completed.add(nodeId);
-            const nodeCompletedAt = new Date();
-            const node = nodes.find((item) => item.id === nodeId);
-            recordNodeResult(nodeId, nodeStartedAt, nodeCompletedAt);
-            updateNodeRunState([nodeId], "success", {
-              duration: formatDurationMs(nodeCompletedAt.getTime() - nodeStartedAt.getTime()),
-              runOutput: node ? buildRunOutput(node, nodes, edges) : undefined,
-            });
+            void (async () => {
+              running.delete(nodeId);
+              const node = nodes.find((item) => item.id === nodeId);
 
-            // Crop execution: crop the upstream image by the resolved
-            // x/y/width/height and store the result on the node's outputImage,
-            // which its Output Image thumbnail and downstream nodes then read.
-            if (node?.data.kind === "crop") {
-              const inputImage = resolveIncomingImage(nodeId, "input-image", nodes, edges);
-              if (inputImage) {
-                const { resolved } = resolveCropParams(node, nodes, edges);
-                void cropImageToDataUrl(inputImage, resolved)
-                  .then((cropped) => {
-                    setNodes((current) =>
-                      current.map((item) =>
-                        item.id === nodeId ? { ...item, data: { ...item.data, outputImage: cropped } } : item,
-                      ),
-                    );
-                  })
-                  .catch(() => {
-                    /* leave outputImage unchanged if the image can't be cropped */
-                  });
+              // Crop execution: crop the upstream image by the resolved
+              // x/y/width/height. We await the result before completing the node
+              // so the cropped image is set on state, recorded in the run output,
+              // and visible in the node's Output Image thumbnail.
+              let croppedImage: string | undefined;
+              if (node?.data.kind === "crop") {
+                const inputImage = resolveIncomingImage(nodeId, "input-image", nodes, edges);
+                if (inputImage) {
+                  const { resolved } = resolveCropParams(node, nodes, edges);
+                  try {
+                    croppedImage = await cropImageToDataUrl(inputImage, resolved);
+                  } catch (error) {
+                    console.error(`[crop] Failed to crop image for node ${nodeId}`, error);
+                    setToast("Crop failed: the input image could not be processed.");
+                  }
+                }
               }
-            }
 
-            scheduleNext();
+              completed.add(nodeId);
+              const nodeCompletedAt = new Date();
+
+              // A node object reflecting the freshly cropped output, so both the
+              // recorded run result and the live thumbnail read the same image.
+              const effectiveNode =
+                node && croppedImage
+                  ? { ...node, data: { ...node.data, outputImage: croppedImage } }
+                  : node;
+
+              if (croppedImage) {
+                setNodes((current) =>
+                  current.map((item) =>
+                    item.id === nodeId ? { ...item, data: { ...item.data, outputImage: croppedImage } } : item,
+                  ),
+                );
+              }
+
+              recordNodeResult(nodeId, nodeStartedAt, nodeCompletedAt, effectiveNode ?? undefined);
+              updateNodeRunState([nodeId], "success", {
+                duration: formatDurationMs(nodeCompletedAt.getTime() - nodeStartedAt.getTime()),
+                runOutput: effectiveNode ? buildRunOutput(effectiveNode, nodes, edges) : undefined,
+              });
+
+              scheduleNext();
+            })();
           }, simulatedRunDelayMs(nodeId)),
         );
       };
